@@ -259,23 +259,6 @@ object Xlsx {
 }
 
 object PeriodExport {
-    /** Фото для PDF: уменьшенное, с учётом поворота камеры (EXIF). */
-    private fun loadPhoto(path: String, maxPx: Int): android.graphics.Bitmap? = try {
-        val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        android.graphics.BitmapFactory.decodeFile(path, o)
-        var sz = 1
-        while (maxOf(o.outWidth, o.outHeight) / (sz * 2) >= maxPx) sz *= 2
-        var b = android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sz })
-        val rot = when (android.media.ExifInterface(path).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)) {
-            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-            else -> 0f
-        }
-        if (b != null && rot != 0f) b = android.graphics.Bitmap.createBitmap(b, 0, 0, b.width, b.height,
-            android.graphics.Matrix().apply { postRotate(rot) }, true)
-        b
-    } catch (_: Exception) { null }
 
     /** Отчёт в Excel: активные ошибки с комментариями. */
     fun xlsx(r: PeriodReport, store: Store, out: File) {
@@ -548,7 +531,7 @@ object PeriodExport {
                 if (y + cap.height + 120 > bottom) newPage(false)
                 y += 6
                 drawLayout(cap, margin.toFloat()); y += cap.height + 4
-                val pics = store.photos(f.id).mapNotNull { loadPhoto(it.path, 700) }
+                val pics = store.photos(f.id).mapNotNull { PhotoUtil.loadBitmap(it.path, 700) }
                 var col = 0; var rowH = 0f
                 for (b in pics) {
                     var w = colW; var h = w * b.height / b.width

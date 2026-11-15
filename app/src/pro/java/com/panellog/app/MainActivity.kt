@@ -9,7 +9,6 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -787,13 +786,8 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         if (now != (e.tag as? String ?: "")) { store.setComment(id, now); e.tag = now }
     }
 
-    private fun thumb(path: String, size: Int): android.graphics.Bitmap? = try {
-        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(path, o)
-        var s = 1
-        while (o.outWidth / (s * 2) >= size && o.outHeight / (s * 2) >= size) s *= 2
-        BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = s })
-    } catch (_: Exception) { null }
+    private fun thumb(path: String, size: Int): android.graphics.Bitmap? =
+        PhotoUtil.loadBitmap(path, size * 2)
 
     private fun takePhoto(fid: String) {
         saveCommentIfAny()
@@ -825,18 +819,28 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         val uris = ArrayList<Uri>()
         data?.clipData?.let { c -> for (k in 0 until c.itemCount) uris.add(c.getItemAt(k).uri) }
         if (uris.isEmpty()) data?.data?.let { uris.add(it) }
-        var n = 0
-        for (u in uris) {
-            try {
+        if (uris.isEmpty()) return
+        Thread {
+            val saved = ArrayList<File>()
+            for (u in uris) {
                 val file = store.newPhotoFile()
-                contentResolver.openInputStream(u)?.use { inp -> file.outputStream().use { inp.copyTo(it) } }
-                if (file.length() > 0) { store.addPhoto(fid, file); n++ } else file.delete()
-            } catch (_: Exception) { }
-        }
-        val f = store.fault(fid)
-        if (f != null) { siteId = f.siteId; faultId = fid; scr = Scr.FAULT }
-        render()
-        if (n > 0) toast(I18n.f("photosAdded", n))
+                try {
+                    contentResolver.openInputStream(u)?.use { inp -> file.outputStream().use { inp.copyTo(it) } }
+                    if (file.length() > 0) {
+                        PhotoUtil.compressJpeg(file)
+                        saved.add(file)
+                    } else file.delete()
+                } catch (_: Exception) { file.delete() }
+            }
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                for (file in saved) store.addPhoto(fid, file)
+                val f = store.fault(fid)
+                if (f != null) { siteId = f.siteId; faultId = fid; scr = Scr.FAULT }
+                render()
+                if (saved.isNotEmpty()) toast(I18n.f("photosAdded", saved.size))
+            }
+        }.start()
     }
 
     @Deprecated("Deprecated in Java")
@@ -849,10 +853,16 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         prefs().edit().remove("pendingPhoto").remove("pendingFault").apply()
         val file = File(path)
         if (resultCode == RESULT_OK && file.exists() && file.length() > 0) {
-            store.addPhoto(fid, file)
-            val f = store.fault(fid)
-            if (f != null) { siteId = f.siteId; faultId = fid; scr = Scr.FAULT }
-            render()
+            Thread {
+                PhotoUtil.compressJpeg(file)
+                mainHandler.post {
+                    if (isFinishing || isDestroyed) return@post
+                    store.addPhoto(fid, file)
+                    val f = store.fault(fid)
+                    if (f != null) { siteId = f.siteId; faultId = fid; scr = Scr.FAULT }
+                    render()
+                }
+            }.start()
         } else file.delete()
     }
 
