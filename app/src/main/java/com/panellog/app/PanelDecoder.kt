@@ -193,7 +193,18 @@ object PanelDecoder {
         Regex("\\S+(?: \\S+)*").replace(line) { logical(it.value) }
     }
 
-    private val TIME = Regex("(\\d{1,2}:\\d\\d:\\d\\d)\\s+'(\\S)\\s+(\\d\\d)\\s+(\\d\\d),?\\s+(\\d{4})(?:\\s+((?:N\\d{3})?L\\d{2}[DM]\\d{3}))?")
+    // Время: «11:41:06» (24 ч) или «11:16:59P» / «10:05:38A» (12 ч, AM/PM — бывает на части панелей)
+    private val TIME = Regex("(\\d{1,2}:\\d\\d:\\d\\d)([AP]?)\\s+'(\\S)\\s+(\\d\\d)\\s+(\\d\\d),?\\s+(\\d{4})(?:\\s+((?:N\\d{3})?L\\d{2}[DM]\\d{3}))?")
+
+    /** «11:16:59» + «P» → «23:16:59»; без буквы — как есть. */
+    private fun time24(t: String, ap: String): String {
+        if (ap.isEmpty()) return t
+        val p = t.split(':')
+        var h = p[0].toIntOrNull() ?: return t
+        if (ap == "P" && h < 12) h += 12
+        if (ap == "A" && h == 12) h = 0
+        return String.format("%02d:%s:%s", h, p[1], p[2])
+    }
     private val ZONE = Regex("Z\\d{3}")
 
     private fun seg(s: String, a: Int, b: Int): String {
@@ -214,15 +225,15 @@ object PanelDecoder {
             val m = TIME.find(v)
             if (m == null) { if (v.isNotBlank()) a = v; continue }
             val line1 = a ?: ""
-            val addr = m.groupValues[6]
+            val addr = m.groupValues[7]
             // На первом листе дата была «месяц день,», здесь «день месяц».
             // Пока считаем «день месяц»; формат уточним по дню недели позже.
             // «месяц день, год» (с запятой, США) или «день месяц год» (региональный)
             val usFormat = m.value.contains(',')
-            val day = if (usFormat) m.groupValues[4] else m.groupValues[3]
-            val month = if (usFormat) m.groupValues[3] else m.groupValues[4]
-            val date = day + "." + month + "." + m.groupValues[5]
-            val time = m.groupValues[1]
+            val day = if (usFormat) m.groupValues[5] else m.groupValues[4]
+            val month = if (usFormat) m.groupValues[4] else m.groupValues[5]
+            val date = day + "." + month + "." + m.groupValues[6]
+            val time = time24(m.groupValues[1], m.groupValues[2])
             if (addr.isNotEmpty()) {
                 out.add(PanelEvent(
                     event = seg(line1, 0, 20),
