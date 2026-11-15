@@ -11,7 +11,7 @@ android {
         applicationId = "com.panellog.app"
         minSdk = 23
         targetSdk = 34
-        val run = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
+        val run = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()) ?: 1
         versionCode = run
         versionName = "0.1.$run"
     }
