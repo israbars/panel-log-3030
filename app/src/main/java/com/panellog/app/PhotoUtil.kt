@@ -28,25 +28,27 @@ object PhotoUtil {
     }
 
     /** Декодирует фото с уменьшением до maxPx по длинной стороне и поворотом по EXIF. */
-    fun loadBitmap(path: String, maxPx: Int): Bitmap? = try {
-        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(path, o)
-        if (o.outWidth <= 0 || o.outHeight <= 0) return null
-        var sample = 1
-        while (maxOf(o.outWidth, o.outHeight) / (sample * 2) >= maxPx) sample *= 2
-        val raw = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
-            ?: return null
-        val m = exifMatrix(path)
-        val longSide = maxOf(raw.width, raw.height)
-        if (longSide > maxPx) {
-            val scale = maxPx.toFloat() / longSide
-            m.postScale(scale, scale)
-        }
-        if (m.isIdentity) return raw
-        val out = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
-        if (out !== raw) raw.recycle()
-        out
-    } catch (_: Throwable) { null }
+    fun loadBitmap(path: String, maxPx: Int): Bitmap? {
+        return try {
+            val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, o)
+            if (o.outWidth <= 0 || o.outHeight <= 0) return null
+            var sample = 1
+            while (maxOf(o.outWidth, o.outHeight) / (sample * 2) >= maxPx) sample *= 2
+            val raw = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
+                ?: return null
+            val m = exifMatrix(path)
+            val longSide = maxOf(raw.width, raw.height)
+            if (longSide > maxPx) {
+                val scale = maxPx.toFloat() / longSide
+                m.postScale(scale, scale)
+            }
+            if (m.isIdentity) return raw
+            val out = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
+            if (out !== raw) raw.recycle()
+            out
+        } catch (_: Throwable) { null }
+    }
 
     /**
      * Сжимает фото на диске в JPEG (до maxPx по длинной стороне, качество quality),
