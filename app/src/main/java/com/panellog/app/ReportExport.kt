@@ -91,7 +91,7 @@ object ReportExport {
         val headFill = Paint().apply { color = Color.rgb(232, 234, 237); style = Paint.Style.FILL }
 
         // Колонки слева направо; для отчёта на иврите порядок зеркальный (# справа).
-        val baseWidths = intArrayOf(20, 58, 88, 112, 170, 75) // сумма 523 = 595 - 2*36
+        val baseWidths = intArrayOf(20, 70, 88, 112, 158, 75) // сумма 523; адрес «N001L01D080» — в одну строку
         val baseHeaders = if (he) arrayOf("#", "כתובת", "סוג", "תקלה", "מיקום", "זמן")
             else arrayOf("#", "כתובת\nАдрес", "סוג\nТип", "תקלה\nНеисправность", "מיקום\nМесто", "זמן\nВремя")
         val widths = if (he) baseWidths.reversedArray() else baseWidths
@@ -428,7 +428,7 @@ object PeriodExport {
         val pad = 3.5f
         val content = pageW - 2 * margin // 535
 
-        val base = intArrayOf(18, 54, 78, 100, 135, 150) // = 535
+        val base = intArrayOf(18, 68, 76, 100, 133, 140) // = 535; адрес «N001L01D080» — в одну строку
         val headersHe = arrayOf("#", "כתובת", "סוג", "תקלה", "מיקום", "סיבה / הערה")
         val headersRu = arrayOf("#", "כתובת\nАдрес", "סוג\nТип", "תקלה\nНеисправность", "מיקום\nМесто", "סיבה / הערה\nПричина / комментарий")
         val widths = if (heOnly) base.reversedArray() else base
