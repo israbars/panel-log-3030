@@ -99,7 +99,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         "waRu" to ("WhatsApp — иврит + русский" to "וואטסאפ — עברית + רוסית"),
         "pdfHe" to ("PDF" to "PDF"),
         "pdfRu" to ("PDF — иврит + русский" to "PDF — עברית + רוסית"),
-        "logFile" to ("Файл лога (для Claude)" to "קובץ יומן (ל-Claude)"),
+        "logFile" to ("Файл лога (для ИИ)" to "קובץ יומן (ל-AI)"),
         "sendList" to ("Отправить список" to "שלח רשימה"),
         "sendPdf" to ("Отправить PDF" to "שלח PDF"),
         "sendLog" to ("Отправить лог" to "שלח יומן"),
