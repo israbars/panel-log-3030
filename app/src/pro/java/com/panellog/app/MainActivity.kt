@@ -70,7 +70,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         private val BAUDS = intArrayOf(300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200)
     }
 
-    private enum class Scr { HOME, SITE, CAPTURE, FAULT, LOGS, PAPER, RECORD, RECLIST }
+    private enum class Scr { HOME, SITE, CAPTURE, FAULT, LOGS, PAPER, RECORD, RECLIST, REMOTE }
 
     private lateinit var store: Store
     private lateinit var usbManager: UsbManager
@@ -120,6 +120,20 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     private val liveActiveAddrs = LinkedHashSet<String>()
     private val captureRender = Runnable { renderScheduled = false; updateCaptureViews() }
     private val liveFlush = Runnable { flushLivePush() }
+
+    // удалённый приём событий с первого телефона (ntfy.sh)
+    private data class RemoteMsg(val id: String, val ts: Long, val text: String)
+    @Volatile private var remoteRunning = false
+    @Volatile private var remoteConn: java.net.HttpURLConnection? = null
+    private val remoteMsgs = ArrayList<RemoteMsg>()
+    private val remoteSeen = HashSet<String>()
+    private var remoteLastId = ""
+    private var remoteStatus = ""
+    private var remoteError = false
+    private var remoteStartTs = 0L
+    private var remoteStatusView: TextView? = null
+    private var remoteListView: LinearLayout? = null
+    private var remoteBtnView: Button? = null
 
     // список неисправностей объекта (перерисовка при поиске)
     private var faultListBox: LinearLayout? = null
@@ -191,6 +205,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
 
     override fun onDestroy() {
         disconnect()
+        stopRemoteStream()
         try { unregisterReceiver(usbReceiver) } catch (_: Exception) {}
         super.onDestroy()
     }
@@ -216,6 +231,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             Scr.PAPER -> go(Scr.LOGS)
             Scr.RECORD -> go(Scr.RECLIST)
             Scr.RECLIST -> go(Scr.SITE)
+            Scr.REMOTE -> { stopRemoteStream(); go(Scr.HOME) }
         }
     }
 
@@ -228,6 +244,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         title = getString(R.string.app_name)
         faultListBox = null
         captureStatusView = null; captureCounterView = null; capturePreview = null; captureConnectBtn = null
+        remoteStatusView = null; remoteListView = null; remoteBtnView = null
         val v = when (scr) {
             Scr.HOME -> homeView()
             Scr.SITE -> siteView()
@@ -237,6 +254,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             Scr.PAPER -> paperView()
             Scr.RECORD -> recordView()
             Scr.RECLIST -> recListView()
+            Scr.REMOTE -> remoteView()
         }
         if (scr != Scr.SITE) { selMode = false; selected.clear() }
         setContentView(if (scr == Scr.SITE && selMode) withSelBar(v) else v)
@@ -317,6 +335,9 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         box.addView(tv(I18n.t("sites"), 24f, true))
         box.addView(btn(I18n.t("newSite"), true) { siteDialog(null) }.apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(10) }
+        })
+        box.addView(btn(I18n.t("remoteBtn")) { go(Scr.REMOTE) }.apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(6) }
         })
         val sites = store.sites()
         if (sites.isEmpty()) box.addView(tv(I18n.t("noSites"), 14f, color = Color.DKGRAY).apply { setPadding(0, dp(16), 0, 0) })
@@ -880,6 +901,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         } catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
     }
 
+
     // ================================================================ Снятие лога
 
     private fun startCapture() {
@@ -1117,8 +1139,12 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         }
     }
 
+    private fun cleanTopic(raw: String): String =
+        raw.trim().removePrefix("https://ntfy.sh/").removePrefix("http://ntfy.sh/")
+            .trim('/').replace(Regex("[^A-Za-z0-9_-]"), "")
+
     private fun pushNtfy(topic: String, message: String, silent: Boolean) {
-        val clean = topic.trim().replace(Regex("[^A-Za-z0-9_-]"), "")
+        val clean = cleanTopic(topic)
         if (clean.isEmpty()) return
         Thread {
             try {
@@ -1170,6 +1196,160 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             out.writeText(sb.toString())
             shareFile(out, "text/plain")
         } catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
+    }
+
+
+    // ================================================================ Приём с монитора (2-й телефон)
+
+    private fun savedRemoteTopic(): String =
+        prefs().getString("remoteTopic", "")?.takeIf { it.isNotEmpty() }
+            ?: prefs().getString("liveTopic", "") ?: ""
+
+    private fun remoteView(): View {
+        val (sv, box) = page()
+        box.addView(tv(I18n.t("remoteTitle"), 20f, true))
+        box.addView(tv(I18n.t("remoteHint"), 13f, color = Color.DKGRAY).apply { setPadding(0, dp(4), 0, dp(8)) })
+        val topicIn = input(I18n.t("remoteTopicHint"), savedRemoteTopic()).apply {
+            setSingleLine()
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(e: Editable?) {
+                    val v = cleanTopic(e?.toString() ?: "")
+                    if (v.isNotEmpty()) prefs().edit().putString("remoteTopic", v).apply()
+                }
+            })
+        }
+        box.addView(topicIn)
+        val connBtn = btn(if (remoteRunning) I18n.t("disconnect") else I18n.t("connect"), true) {
+            if (remoteRunning) {
+                stopRemoteStream()
+                setRemoteStatus(I18n.t("notConnected"), false)
+            } else {
+                val t = cleanTopic(topicIn.text.toString())
+                if (t.isEmpty()) { toast(I18n.t("remoteNeedTopic")); return@btn }
+                prefs().edit().putString("remoteTopic", t).apply()
+                startRemoteStream(t)
+            }
+        }
+        remoteBtnView = connBtn
+        box.addView(row(
+            connBtn,
+            btn(I18n.t("liveClear")) { remoteMsgs.clear(); remoteSeen.clear(); fillRemoteList() },
+            btn(I18n.t("back")) { stopRemoteStream(); go(Scr.HOME) }
+        ).apply { setPadding(0, dp(6), 0, 0) })
+        val stTv = tv(remoteStatus.ifEmpty { I18n.t("notConnected") }, 14f, true,
+            if (remoteError) Color.rgb(200, 30, 30) else Color.rgb(21, 24, 28)).apply { setPadding(0, dp(8), 0, dp(6)) }
+        remoteStatusView = stTv
+        box.addView(stTv)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        remoteListView = list
+        box.addView(list)
+        fillRemoteList()
+        return sv
+    }
+
+    private fun setRemoteStatus(text: String, error: Boolean) {
+        remoteStatus = text; remoteError = error
+        remoteStatusView?.let {
+            it.text = text
+            it.setTextColor(if (error) Color.rgb(200, 30, 30) else Color.rgb(21, 24, 28))
+        }
+        remoteBtnView?.text = if (remoteRunning) I18n.t("disconnect") else I18n.t("connect")
+    }
+
+    private fun fillRemoteList() {
+        val list = remoteListView ?: return
+        list.removeAllViews()
+        if (remoteMsgs.isEmpty()) {
+            list.addView(tv(I18n.t("remoteEmpty"), 14f, color = Color.DKGRAY).apply { setPadding(0, dp(10), 0, 0) })
+            return
+        }
+        val tf = SimpleDateFormat("HH:mm:ss", Locale.US)
+        for (m in remoteMsgs) {
+            val c = card()
+            when {
+                m.text.contains("🟢") -> c.background = rounded(Color.rgb(235, 250, 238), 12, Color.rgb(175, 225, 185))
+                m.text.contains("🟡") -> c.background = rounded(Color.rgb(255, 248, 225), 12, Color.rgb(235, 210, 145))
+                m.text.contains("🔴") || m.text.contains("⚠️") -> c.background = rounded(Color.rgb(255, 238, 238), 12, Color.rgb(235, 185, 185))
+            }
+            c.addView(tv(tf.format(Date(m.ts)), 12f, true, Color.DKGRAY))
+            c.addView(tv(m.text, 15f).apply { setPadding(0, dp(2), 0, 0) })
+            list.addView(c)
+        }
+    }
+
+    private fun vibrateShort() {
+        try {
+            @Suppress("DEPRECATION")
+            val v = getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator ?: return
+            if (Build.VERSION.SDK_INT >= 26) {
+                v.vibrate(android.os.VibrationEffect.createOneShot(250, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                v.vibrate(250)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun startRemoteStream(topic: String) {
+        stopRemoteStream()
+        remoteRunning = true
+        remoteStartTs = System.currentTimeMillis()
+        setRemoteStatus(I18n.t("remoteConnecting"), false)
+        Thread {
+            while (remoteRunning) {
+                var conn: java.net.HttpURLConnection? = null
+                try {
+                    val since = if (remoteLastId.isNotEmpty()) remoteLastId else "30m"
+                    conn = (java.net.URL("https://ntfy.sh/$topic/json?since=$since").openConnection() as java.net.HttpURLConnection).apply {
+                        connectTimeout = 10000
+                        readTimeout = 90000
+                    }
+                    remoteConn = conn
+                    val code = conn.responseCode
+                    if (code !in 200..299) throw IllegalStateException("HTTP $code")
+                    mainHandler.post { if (remoteRunning) setRemoteStatus(I18n.f("remoteConnected", topic), false) }
+                    conn.inputStream.bufferedReader(Charsets.UTF_8).use { br ->
+                        while (remoteRunning) {
+                            val line = br.readLine() ?: break
+                            if (line.isBlank()) continue
+                            val j = org.json.JSONObject(line)
+                            if (j.optString("event") != "message") continue
+                            val id = j.optString("id")
+                            val msg = j.optString("message")
+                            val ts = j.optLong("time") * 1000L
+                            if (id.isEmpty() || msg.isEmpty()) continue
+                            mainHandler.post {
+                                remoteLastId = id
+                                if (remoteSeen.add(id)) {
+                                    remoteMsgs.add(0, RemoteMsg(id, if (ts > 0) ts else System.currentTimeMillis(), msg))
+                                    if (remoteMsgs.size > 100) remoteMsgs.removeAt(remoteMsgs.lastIndex)
+                                    fillRemoteList()
+                                    if (ts == 0L || ts >= remoteStartTs - 3000L) {
+                                        beepLive()
+                                        vibrateShort()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    if (remoteRunning) mainHandler.post { if (remoteRunning) setRemoteStatus(I18n.t("remoteReconnecting"), true) }
+                } finally {
+                    remoteConn = null
+                    try { conn?.disconnect() } catch (_: Exception) {}
+                }
+                if (remoteRunning) try { Thread.sleep(2500) } catch (_: Exception) {}
+            }
+        }.start()
+    }
+
+    private fun stopRemoteStream() {
+        remoteRunning = false
+        val c = remoteConn
+        remoteConn = null
+        if (c != null) Thread { try { c.disconnect() } catch (_: Exception) {} }.start()
     }
 
     /** Что печатаем с панели: неисправности / тревоги / история / живой монитор. */
@@ -1499,6 +1679,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         } catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
     }
 
+
     private fun fillRecList() {
         val list = recList ?: return
         list.removeAllViews()
@@ -1585,6 +1766,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         } catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
     }
 
+
     private fun hexDump(bytes: ByteArray): String {
         val sb = StringBuilder(bytes.size * 4 + 64)
         var i = 0
@@ -1664,6 +1846,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             startActivity(Intent.createChooser(send, I18n.t("sendWith")))
         } catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
     }
+
 
     private data class G1h(val site: String, val address: String, val panel: String, val detected: String,
                            val ts: Long, val events: Int, val raw: ByteArray,
@@ -1751,6 +1934,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             startActivity(Intent.createChooser(send, I18n.t("sendWith")))
         } catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
     }
+
 
     private fun importRecPack(packs: List<List<G1Rec>>, k: Int, done: () -> Unit) {
         if (k >= packs.size) { done(); return }
