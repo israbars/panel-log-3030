@@ -1854,6 +1854,17 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
 
     /** Файл .g1h открыт из WhatsApp/почты/проводника или прислан через «Поделиться». */
     private fun handleFileIntent(i: Intent) {
+        val d = i.data
+        if (i.action == Intent.ACTION_VIEW && d != null && d.host == "ntfy.sh") {
+            val t = cleanTopic(d.lastPathSegment ?: d.path ?: "")
+            if (t.isNotEmpty()) {
+                setIntent(Intent(this, MainActivity::class.java))
+                prefs().edit().putString("remoteTopic", t).apply()
+                go(Scr.REMOTE)
+                startRemoteStream(t)
+                return
+            }
+        }
         val uris = ArrayList<Uri>()
         when (i.action) {
             Intent.ACTION_VIEW -> i.data?.let { uris.add(it) }

@@ -33,6 +33,13 @@
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="application/json" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="ntfy.sh" android:pathPrefix="/" />
+                <data android:scheme="http" android:host="ntfy.sh" android:pathPrefix="/" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>
