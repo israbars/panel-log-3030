@@ -206,6 +206,7 @@ object PanelDecoder {
         return String.format("%02d:%s:%s", h, p[1], p[2])
     }
     private val ZONE = Regex("Z\\d{3}")
+    private val ADDR = Regex("(?:N\\d{3})?L\\d{2}[DM]\\d{3}")
 
     private fun seg(s: String, a: Int, b: Int): String {
         if (a >= s.length) return ""
@@ -225,7 +226,8 @@ object PanelDecoder {
             val m = TIME.find(v)
             if (m == null) { if (v.isNotBlank()) a = v; continue }
             val line1 = a ?: ""
-            val addr = m.groupValues[7]
+            val addrRight = m.groupValues[7]
+            val addrLeft = if (addrRight.isEmpty()) ADDR.find(v.substring(0, m.range.first))?.value ?: "" else ""
             // На первом листе дата была «месяц день,», здесь «день месяц».
             // Пока считаем «день месяц»; формат уточним по дню недели позже.
             // «месяц день, год» (с запятой, США) или «день месяц год» (региональный)
@@ -234,7 +236,7 @@ object PanelDecoder {
             val month = if (usFormat) m.groupValues[4] else m.groupValues[5]
             val date = day + "." + month + "." + m.groupValues[6]
             val time = time24(m.groupValues[1], m.groupValues[2])
-            if (addr.isNotEmpty()) {
+            if (addrRight.isNotEmpty()) {
                 out.add(PanelEvent(
                     event = seg(line1, 0, 20),
                     problem = seg(line1, 20, 40),
@@ -243,7 +245,24 @@ object PanelDecoder {
                     zoneLabel = seg(v, 0, 20),
                     zone = ZONE.find(v.take(30))?.value ?: "",
                     devType = seg(v, 28, minOf(42, m.range.first)),
-                    address = addr,
+                    address = addrRight,
+                    node = "",
+                    date = date, time = time
+                ))
+            } else if (addrLeft.isNotEmpty()) {
+                val tail = v.substring(m.range.last + 1)
+                val zm = ZONE.find(tail)
+                val devType = logical(if (zm != null) tail.substring(0, zm.range.first) else tail)
+                val zoneLabel = if (zm != null) logical(tail.substring(zm.range.last + 1)) else ""
+                out.add(PanelEvent(
+                    event = seg(line1, 60, 80),
+                    problem = seg(line1, 40, 60),
+                    label = seg(line1, 20, 40),
+                    label2 = seg(line1, 0, 20),
+                    zoneLabel = zoneLabel,
+                    zone = zm?.value ?: "",
+                    devType = devType,
+                    address = addrLeft,
                     node = "",
                     date = date, time = time
                 ))
@@ -268,10 +287,14 @@ object PanelDecoder {
         "מעגל פתוח" to "обрыв цепи",
         "מעגל מקוצר" to "короткое замыкание",
         "נחוצה תחזוקה" to "требуется обслуживание (запылён)",
+        "תקלה" to "неисправность",
+        "מנוקה תקלה" to "неисправность устранена",
         "אישור תקלה" to "неисправность (квитирована)",
+        "מערכת מאותחלת" to "система в норме",
         "MISMAT HDWE TYPE" to "тип устройства не совпадает с программой",
         "NVRAM BATTERY TROUBLE" to "батарея памяти CPU",
         "SOFTWARE MISMATCH" to "несовпадение версий ПО",
+        "TROUBLE PEND" to "индикатор общей неисправности",
         "TROUBLE MON" to "монитор неисправности",
         "MONITOR" to "монитор-модуль",
         "חום" to "тепловой",
@@ -288,6 +311,7 @@ object PanelDecoder {
         "חום" to ("גלאי חום" to "тепловой"),
         "MONITOR" to ("מודול ניטור" to "монитор-модуль"),
         "TROUBLE MON" to ("מודול ניטור תקלה" to "модуль контроля неисправности"),
+        "TROUBLE PEND" to ("מודול תקלה כללית" to "индикатор общей неисправности"),
         "SMOKE CONVEN" to ("מודול גלאים קונבנציונליים" to "модуль неадресных датчиков"),
         "CONTROL" to ("מודול שליטה" to "модуль управления"),
         "RELAY" to ("ממסר" to "реле"),

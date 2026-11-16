@@ -1053,9 +1053,15 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             val body = if (evs.isNotEmpty()) {
                 evs.joinToString("\n\n") { e ->
                     val ev = e.event.trim()
-                    val l1 = (if (e.isSystem) I18n.t("system") else e.address) +
+                    val icon = when {
+                        ev.contains("מנוקה") || ev == "OFF" -> "🟢 "
+                        ev.contains("אישור") -> "🟡 "
+                        ev.isNotEmpty() -> "🔴 "
+                        else -> ""
+                    }
+                    val l1 = icon + (if (e.isSystem) I18n.t("system") else e.address) +
                         (if (ev.isNotEmpty()) " · " + I18n.panel(ev) else "")
-                    val l2 = I18n.panel(e.problem)
+                    val l2 = if (e.problem.isNotEmpty()) I18n.panel(e.problem) else ""
                     val pl = listOf(e.label, e.label2).filter { it.isNotEmpty() }.joinToString(" · ")
                     listOf(l1, l2, pl).filter { it.isNotEmpty() }.joinToString("\n")
                 }
