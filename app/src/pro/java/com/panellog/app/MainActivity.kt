@@ -116,6 +116,8 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     private var liveSentBytes = 0
     private var liveLastTime = ""
     private var livePendingBeep = true
+    private var liveBaseAddrs: Set<String> = emptySet()
+    private val liveActiveAddrs = LinkedHashSet<String>()
     private val captureRender = Runnable { renderScheduled = false; updateCaptureViews() }
     private val liveFlush = Runnable { flushLivePush() }
 
@@ -887,9 +889,26 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         liveSentBytes = 0
         liveLastTime = ""
         livePendingBeep = true
+        initLiveTracking()
         captureStatus = ""
         go(Scr.CAPTURE)
         connect()
+    }
+
+    /** Снимок активных адресов панели для подсказок в «Живом мониторе» (базу не меняет). */
+    private fun initLiveTracking() {
+        liveActiveAddrs.clear()
+        val sid = siteId
+        val pid = capturePanelId
+        if (captureKind != "live" || sid == null || pid == null) {
+            liveBaseAddrs = emptySet()
+            return
+        }
+        val addrs = store.faults(sid)
+            .filter { it.panelId == pid && it.active && !it.isManual && it.address.isNotEmpty() }
+            .map { it.address }.toSet()
+        liveBaseAddrs = addrs
+        liveActiveAddrs.addAll(addrs)
     }
 
     private fun liveTopic(): String {
@@ -923,6 +942,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 connectBtn,
                 btn(I18n.t("liveClear")) {
                     captureBytes.reset(); lastEventCount = 0; liveSentLines = 0; liveSentBytes = 0; liveLastTime = ""
+                    initLiveTracking()
                     updateCaptureViews()
                 },
                 btn(I18n.t("close")) { disconnect(); captureBytes.reset(); captureKind = "faults"; go(Scr.SITE) }
@@ -993,7 +1013,8 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         val events = if (d.graphic) PanelDecoder.parse(d.visualLines) else emptyList()
         lastEventCount = events.size
         if (captureKind == "live") {
-            val tm = if (liveLastTime.isNotEmpty()) " · $liveLastTime" else ""
+            val tm = (if (liveLastTime.isNotEmpty()) " · $liveLastTime" else "") +
+                (if (liveBaseAddrs.isNotEmpty()) I18n.f("liveRemain", liveActiveAddrs.size, liveBaseAddrs.size) else "")
             captureCounterView?.text = I18n.f("liveCounter", bytes.size, d.visualLines.size, events.size, tm)
             if (bytes.isEmpty()) {
                 capturePreview?.text = I18n.t("liveWaiting")
@@ -1063,7 +1084,8 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                         (if (ev.isNotEmpty()) " · " + I18n.panel(ev) else "")
                     val l2 = if (e.problem.isNotEmpty()) I18n.panel(e.problem) else ""
                     val pl = listOf(e.label, e.label2).filter { it.isNotEmpty() }.joinToString(" · ")
-                    listOf(l1, l2, pl).filter { it.isNotEmpty() }.joinToString("\n")
+                    val hint = liveCompareHint(e.address, ev)
+                    listOf(l1, l2, pl, hint).filter { it.isNotEmpty() }.joinToString("\n")
                 }
             } else {
                 PanelDecoder.logicalLines(newVis).joinToString("\n")
@@ -1074,6 +1096,24 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             liveSentBytes = bytes.size
             val txt = PanelDecoder.decode(slice).visualLines.joinToString("\n").ifBlank { hexDump(slice) }
             pushNtfy(liveTopic(), "$head\n$txt", true)
+        }
+    }
+
+    /** Сверка живого события со стартовым списком ошибок в памяти (для подсказки в уведомлении). */
+    private fun liveCompareHint(addr: String, ev: String): String {
+        if (addr.isEmpty() || liveBaseAddrs.isEmpty()) return ""
+        return when {
+            ev.contains("מנוקה") -> {
+                if (liveActiveAddrs.remove(addr)) I18n.f("liveClearedIn", liveActiveAddrs.size, liveBaseAddrs.size)
+                else I18n.f("liveClearedOut", liveActiveAddrs.size, liveBaseAddrs.size)
+            }
+            ev.contains("אישור") -> I18n.f("liveAckFault", liveActiveAddrs.size, liveBaseAddrs.size)
+            ev.contains("תקלה") -> {
+                liveActiveAddrs.add(addr)
+                if (addr in liveBaseAddrs) I18n.f("liveKnownFault", liveActiveAddrs.size, liveBaseAddrs.size)
+                else I18n.f("liveNewFault", liveActiveAddrs.size, liveBaseAddrs.size)
+            }
+            else -> ""
         }
     }
 
