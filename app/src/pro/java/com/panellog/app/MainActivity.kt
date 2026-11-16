@@ -112,7 +112,12 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     private var captureConnectBtn: Button? = null
     private var renderScheduled = false
     private var lastEventCount = 0
+    private var liveSentLines = 0
+    private var liveSentBytes = 0
+    private var liveLastTime = ""
+    private var livePendingBeep = true
     private val captureRender = Runnable { renderScheduled = false; updateCaptureViews() }
+    private val liveFlush = Runnable { flushLivePush() }
 
     // список неисправностей объекта (перерисовка при поиске)
     private var faultListBox: LinearLayout? = null
@@ -878,33 +883,94 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     private fun startCapture() {
         captureBytes.reset()
         lastEventCount = 0
+        liveSentLines = 0
+        liveSentBytes = 0
+        liveLastTime = ""
+        livePendingBeep = true
         captureStatus = ""
         go(Scr.CAPTURE)
         connect()
+    }
+
+    private fun liveTopic(): String {
+        var t = prefs().getString("liveTopic", "")?.trim() ?: ""
+        if (t.isEmpty()) {
+            t = "g1-hotelo-" + (1000..9999).random()
+            prefs().edit().putString("liveTopic", t).apply()
+        }
+        return t
     }
 
     private fun captureView(): View {
         val s = siteId?.let { store.site(it) }
         val (sv, box) = page()
         val cp = capturePanelId?.let { store.panel(it) }
-        box.addView(tv(I18n.t("capture") + (if (s != null) " · " + s.name else "") + (if (cp != null) " · " + cp.name else ""), 20f, true))
+        val isLive = captureKind == "live"
+        val headTitle = (if (isLive) I18n.t("liveTitle") else I18n.t("capture")) +
+            (if (s != null) " · " + s.name else "") + (if (cp != null) " · " + cp.name else "")
+        box.addView(tv(headTitle, 20f, true))
         val statusTv = tv(captureStatus.ifEmpty { I18n.t("notConnected") }, 14f, true,
             if (captureError) Color.rgb(200, 30, 30) else Color.rgb(21, 24, 28)).apply { setPadding(0, dp(8), 0, dp(4)) }
         captureStatusView = statusTv
         box.addView(statusTv)
-        box.addView(tv(I18n.t("printHint"), 13f, color = Color.DKGRAY))
+        box.addView(tv(if (isLive) I18n.t("liveHint") else I18n.t("printHint"), 13f, color = Color.DKGRAY))
         val connectBtn = btn(if (port == null) I18n.t("connect") else I18n.t("disconnect")) {
             if (port == null) connect() else { disconnect(); setCapture(I18n.t("notConnected"), false) }
         }
         captureConnectBtn = connectBtn
-        box.addView(row(connectBtn, btn(I18n.t("finish"), true) { finishCapture() }).apply { setPadding(0, dp(8), 0, 0) })
+        if (isLive) {
+            box.addView(row(
+                connectBtn,
+                btn(I18n.t("liveClear")) {
+                    captureBytes.reset(); lastEventCount = 0; liveSentLines = 0; liveSentBytes = 0; liveLastTime = ""
+                    updateCaptureViews()
+                },
+                btn(I18n.t("close")) { disconnect(); captureBytes.reset(); captureKind = "faults"; go(Scr.SITE) }
+            ).apply { setPadding(0, dp(8), 0, 0) })
+            box.addView(btn(I18n.t("liveShareLog"), true) { shareLiveTestFile() }.apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(6) }
+            })
+            val remoteCard = card().apply {
+                background = rounded(Color.rgb(240, 246, 255), 10, Color.rgb(190, 210, 240))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
+            }
+            remoteCard.addView(tv(I18n.t("liveRemoteLabel"), 13f, true))
+            val topicIn = input("g1-hotelo-...", liveTopic()).apply { setSingleLine() }
+            val hintTv = tv(I18n.f("liveRemoteHint", liveTopic()), 12f, color = Color.rgb(30, 63, 138)).apply { setPadding(0, dp(2), 0, dp(4)) }
+            topicIn.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(e: Editable?) {
+                    val v = e?.toString()?.trim()?.replace(Regex("[^A-Za-z0-9_-]"), "") ?: ""
+                    if (v.isNotEmpty()) {
+                        prefs().edit().putString("liveTopic", v).apply()
+                        hintTv.text = I18n.f("liveRemoteHint", v)
+                    }
+                }
+            })
+            remoteCard.addView(topicIn)
+            remoteCard.addView(hintTv)
+            remoteCard.addView(row(
+                btn(I18n.t("liveTestPush")) {
+                    val t = liveTopic()
+                    val msg = I18n.t("liveTestMsg") + (if (s != null) "\n" + s.name else "") + (if (cp != null) " · " + cp.name else "")
+                    pushNtfy(t, msg, false)
+                },
+                btn(I18n.t("liveShareLink")) {
+                    shareWhatsapp("https://ntfy.sh/" + liveTopic())
+                }
+            ))
+            box.addView(remoteCard)
+        } else {
+            box.addView(row(connectBtn, btn(I18n.t("finish"), true) { finishCapture() }).apply { setPadding(0, dp(8), 0, 0) })
+        }
         val counterTv = tv("", 13f, color = Color.rgb(60, 66, 75)).apply { setPadding(0, dp(8), 0, dp(4)) }
         captureCounterView = counterTv
         box.addView(counterTv)
         val previewTv = TextView(this).apply {
             typeface = Typeface.MONOSPACE; textSize = 11f
             setTextColor(Color.rgb(20, 230, 90)); setBackgroundColor(Color.BLACK)
-            setPadding(dp(6), dp(6), dp(6), dp(6)); minHeight = dp(160)
+            setPadding(dp(6), dp(6), dp(6), dp(6)); minHeight = dp(180)
         }
         capturePreview = previewTv
         box.addView(previewTv)
@@ -926,6 +992,35 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         val d = PanelDecoder.decode(bytes)
         val events = if (d.graphic) PanelDecoder.parse(d.visualLines) else emptyList()
         lastEventCount = events.size
+        if (captureKind == "live") {
+            val tm = if (liveLastTime.isNotEmpty()) " · $liveLastTime" else ""
+            captureCounterView?.text = I18n.f("liveCounter", bytes.size, d.visualLines.size, events.size, tm)
+            if (bytes.isEmpty()) {
+                capturePreview?.text = I18n.t("liveWaiting")
+                return
+            }
+            val sb = StringBuilder()
+            if (events.isNotEmpty()) {
+                for (e in events.takeLast(30)) {
+                    val ev = e.event.trim()
+                    sb.append(e.date).append(' ').append(e.time)
+                    if (ev.isNotEmpty()) sb.append(" · ").append(I18n.panel(ev))
+                    sb.append('\n')
+                    sb.append(if (e.isSystem) I18n.t("system") else e.address).append("  ").append(I18n.panel(e.problem))
+                    val pl = listOf(e.label, e.label2).filter { it.isNotEmpty() }.joinToString(" · ")
+                    if (pl.isNotEmpty()) sb.append("  ").append(pl)
+                    sb.append("\n\n")
+                }
+            }
+            if (d.visualLines.isNotEmpty()) {
+                sb.append("=== ").append(I18n.t("paperView")).append(" (").append(d.visualLines.size).append(") ===\n")
+                sb.append(PanelDecoder.logicalLines(d.visualLines.takeLast(40)).joinToString("\n"))
+            } else {
+                sb.append(hexDump(bytes.takeLast(256).toByteArray()))
+            }
+            capturePreview?.text = sb.toString().trimEnd()
+            return
+        }
         captureCounterView?.text = I18n.f("received", bytes.size, events.size)
         capturePreview?.text = events.takeLast(60).joinToString("\n") { e ->
             (if (e.isSystem) I18n.t("system") else e.address) + "  " + e.problem +
@@ -933,11 +1028,109 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         }
     }
 
-    /** Что печатаем с панели: неисправности / тревоги / история. */
+    private fun beepLive() {
+        try {
+            val tg = android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 90)
+            tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 180)
+            mainHandler.postDelayed({ try { tg.release() } catch (_: Exception) {} }, 300)
+        } catch (_: Exception) {}
+    }
+
+    private fun flushLivePush() {
+        livePendingBeep = true
+        if (captureKind != "live") return
+        val bytes = captureBytes.toByteArray()
+        if (bytes.isEmpty()) return
+        val s = siteId?.let { store.site(it) }
+        val cp = capturePanelId?.let { store.panel(it) }
+        val head = "📡 " + listOfNotNull(s?.name, cp?.name, liveLastTime.ifEmpty { null }).joinToString(" · ")
+        val d = PanelDecoder.decode(bytes)
+        if (d.graphic && d.visualLines.size > liveSentLines) {
+            val newVis = d.visualLines.subList(liveSentLines, d.visualLines.size)
+            liveSentLines = d.visualLines.size
+            liveSentBytes = bytes.size
+            val evs = PanelDecoder.parse(newVis)
+            val body = if (evs.isNotEmpty()) {
+                evs.joinToString("\n\n") { e ->
+                    val ev = e.event.trim()
+                    val l1 = (if (e.isSystem) I18n.t("system") else e.address) +
+                        (if (ev.isNotEmpty()) " · " + I18n.panel(ev) else "")
+                    val l2 = I18n.panel(e.problem)
+                    val pl = listOf(e.label, e.label2).filter { it.isNotEmpty() }.joinToString(" · ")
+                    listOf(l1, l2, pl).filter { it.isNotEmpty() }.joinToString("\n")
+                }
+            } else {
+                PanelDecoder.logicalLines(newVis).joinToString("\n")
+            }
+            pushNtfy(liveTopic(), "$head\n$body", true)
+        } else if (!d.graphic && bytes.size > liveSentBytes) {
+            val slice = bytes.copyOfRange(liveSentBytes, bytes.size)
+            liveSentBytes = bytes.size
+            val txt = PanelDecoder.decode(slice).visualLines.joinToString("\n").ifBlank { hexDump(slice) }
+            pushNtfy(liveTopic(), "$head\n$txt", true)
+        }
+    }
+
+    private fun pushNtfy(topic: String, message: String, silent: Boolean) {
+        val clean = topic.trim().replace(Regex("[^A-Za-z0-9_-]"), "")
+        if (clean.isEmpty()) return
+        Thread {
+            try {
+                val conn = (java.net.URL("https://ntfy.sh/$clean").openConnection() as java.net.HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                    setRequestProperty("Content-Type", "text/plain; charset=utf-8")
+                    setRequestProperty("Priority", "high")
+                }
+                conn.outputStream.use { it.write(message.toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                conn.disconnect()
+                if (!silent) mainHandler.post {
+                    if (code in 200..299) toast(I18n.f("livePushSent", clean))
+                    else toast(I18n.t("livePushErr") + "HTTP $code")
+                }
+            } catch (e: Exception) {
+                if (!silent) mainHandler.post { toast(I18n.t("livePushErr") + e.message) }
+            }
+        }.start()
+    }
+
+    private fun shareLiveTestFile() {
+        val raw = captureBytes.toByteArray()
+        if (raw.isEmpty()) { toast(I18n.t("noData")); return }
+        try {
+            val s = siteId?.let { store.site(it) }
+            val cp = capturePanelId?.let { store.panel(it) }
+            val d = PanelDecoder.decode(raw)
+            val sb = StringBuilder()
+            sb.append("=== G1 Hotelo Pro: тест живого монитора TB5 ===\n")
+            sb.append("Объект: ").append(s?.name ?: "").append('\n')
+            sb.append("Панель: ").append(cp?.name ?: "").append('\n')
+            sb.append("Время: ").append(fmt(System.currentTimeMillis())).append('\n')
+            sb.append("Байт: ").append(raw.size).append('\n')
+            sb.append("Версия приложения: ").append(appVersion()).append("\n\n")
+            if (d.graphic) {
+                val ev = PanelDecoder.parse(d.visualLines)
+                sb.append("=== СОБЫТИЯ (").append(ev.size).append(") ===\n")
+                for (e in ev) sb.append(listOf(e.date, e.time, e.event.trim(), e.address, e.zone, e.devType, e.problem, e.label, e.label2, e.node).joinToString("\t")).append('\n')
+                sb.append("\n=== КАК НА БУМАГЕ (").append(d.visualLines.size).append(" строк) ===\n")
+                sb.append(PanelDecoder.logicalLines(d.visualLines).joinToString("\n")).append("\n\n")
+                if (d.unknownGlyphs.isNotEmpty()) sb.append("=== НЕЗНАКОМЫЕ СИМВОЛЫ ===\n").append(d.unknownGlyphs.joinToString("\n")).append("\n\n")
+            }
+            sb.append("=== HEX (сырые байты) ===\n").append(hexDump(raw))
+            val out = File(store.dataDir(), "live_test_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".txt")
+            out.writeText(sb.toString())
+            shareFile(out, "text/plain")
+        } catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
+    }
+
+    /** Что печатаем с панели: неисправности / тревоги / история / живой монитор. */
     private fun chooseKindThen(then: () -> Unit) {
-        val kinds = listOf("faults", "alarms", "history")
+        val kinds = listOf("faults", "alarms", "history", "live")
         AlertDialog.Builder(this).setTitle(I18n.t("kindQ"))
-            .setItems(arrayOf(I18n.t("kindFaults"), I18n.t("kindAlarms"), I18n.t("kindHistory"))) { _, w ->
+            .setItems(arrayOf(I18n.t("kindFaults"), I18n.t("kindAlarms"), I18n.t("kindHistory"), I18n.t("kindLive"))) { _, w ->
                 captureKind = kinds[w]; then()
             }.show()
     }
@@ -1040,11 +1233,12 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     }
 
     private fun leaveCapture() {
+        mainHandler.removeCallbacks(liveFlush)
         if (captureBytes.size() > 0) {
             AlertDialog.Builder(this).setMessage(I18n.t("discardQ"))
-                .setPositiveButton(I18n.t("yes")) { _, _ -> disconnect(); captureBytes.reset(); go(Scr.SITE) }
+                .setPositiveButton(I18n.t("yes")) { _, _ -> disconnect(); captureBytes.reset(); captureKind = "faults"; go(Scr.SITE) }
                 .setNegativeButton(I18n.t("no"), null).show()
-        } else { disconnect(); go(Scr.SITE) }
+        } else { disconnect(); captureKind = "faults"; go(Scr.SITE) }
     }
 
     private fun describe(d: UsbDevice): String {
@@ -1056,7 +1250,8 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         if (port != null) return
         val drivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
         if (drivers.isEmpty()) {
-            setCapture(if (usbManager.deviceList.isEmpty()) I18n.t("noUsb") else I18n.t("notFound"), true); return
+            val extra = if (usbManager.deviceList.isEmpty()) "" else " (" + usbManager.deviceList.values.joinToString { describe(it) } + ")"
+            setCapture((if (usbManager.deviceList.isEmpty()) I18n.t("noUsb") else I18n.t("notFound")) + extra, true); return
         }
         val driver = drivers[0]
         val device = driver.device
@@ -1085,6 +1280,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     }
 
     private fun disconnect() {
+        mainHandler.removeCallbacks(liveFlush)
         ioManager?.let { try { it.stop() } catch (_: Exception) {} }
         ioManager = null
         port?.let { try { it.close() } catch (_: Exception) {} }
@@ -1095,8 +1291,15 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     override fun onNewData(data: ByteArray) {
         mainHandler.post {
             if (captureBytes.size() < MAX_CAPTURE_BYTES) captureBytes.write(data)
-            // байты — сразу, на каждый пакет; разбор событий — не чаще двух раз в секунду
-            captureCounterView?.text = I18n.f("received", captureBytes.size(), lastEventCount)
+            liveLastTime = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+            if (captureKind == "live") {
+                if (livePendingBeep) { livePendingBeep = false; beepLive() }
+                mainHandler.removeCallbacks(liveFlush)
+                mainHandler.postDelayed(liveFlush, 1200)
+            } else {
+                // байты — сразу, на каждый пакет; разбор событий — не чаще двух раз в секунду
+                captureCounterView?.text = I18n.f("received", captureBytes.size(), lastEventCount)
+            }
             if (!renderScheduled) { renderScheduled = true; mainHandler.postDelayed(captureRender, 500) }
         }
     }
