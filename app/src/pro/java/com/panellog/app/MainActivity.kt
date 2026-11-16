@@ -130,7 +130,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     private var remoteLastId = ""
     private var remoteStatus = ""
     private var remoteError = false
-    private var remoteStartTs = 0L
+    private var remoteReadyForSound = false
     private var remoteStatusView: TextView? = null
     private var remoteListView: LinearLayout? = null
     private var remoteBtnView: Button? = null
@@ -1079,6 +1079,16 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         } catch (_: Exception) {}
     }
 
+    /** Системный звук уведомления при получении события с живого монитора. */
+    private fun notifySound() {
+        try {
+            val uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+            val r = android.media.RingtoneManager.getRingtone(applicationContext, uri)
+            if (r != null) { r.play(); return }
+        } catch (_: Exception) {}
+        beepLive()
+    }
+
     private fun flushLivePush() {
         livePendingBeep = true
         if (captureKind != "live") return
@@ -1309,7 +1319,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     private fun startRemoteStream(topic: String) {
         stopRemoteStream()
         remoteRunning = true
-        remoteStartTs = System.currentTimeMillis()
+        remoteReadyForSound = false
         setRemoteStatus(I18n.t("remoteConnecting"), false)
         Thread {
             while (remoteRunning) {
@@ -1323,7 +1333,11 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                     remoteConn = conn
                     val code = conn.responseCode
                     if (code !in 200..299) throw IllegalStateException("HTTP $code")
-                    mainHandler.post { if (remoteRunning) setRemoteStatus(I18n.f("remoteConnected", topic), false) }
+                    mainHandler.post {
+                        if (!remoteRunning) return@post
+                        setRemoteStatus(I18n.f("remoteConnected", topic), false)
+                        if (!remoteReadyForSound) mainHandler.postDelayed({ remoteReadyForSound = true }, 1200)
+                    }
                     conn.inputStream.bufferedReader(Charsets.UTF_8).use { br ->
                         while (remoteRunning) {
                             val line = br.readLine() ?: break
@@ -1340,8 +1354,8 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                                     remoteMsgs.add(0, RemoteMsg(id, if (ts > 0) ts else System.currentTimeMillis(), msg))
                                     if (remoteMsgs.size > 100) remoteMsgs.removeAt(remoteMsgs.lastIndex)
                                     fillRemoteList()
-                                    if (ts == 0L || ts >= remoteStartTs - 3000L) {
-                                        beepLive()
+                                    if (remoteReadyForSound) {
+                                        notifySound()
                                         vibrateShort()
                                     }
                                 }
