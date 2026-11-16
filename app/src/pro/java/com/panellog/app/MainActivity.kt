@@ -1238,6 +1238,11 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             btn(I18n.t("liveClear")) { remoteMsgs.clear(); remoteSeen.clear(); fillRemoteList() },
             btn(I18n.t("back")) { stopRemoteStream(); go(Scr.HOME) }
         ).apply { setPadding(0, dp(6), 0, 0) })
+        if (Build.VERSION.SDK_INT >= 31) {
+            box.addView(btn(I18n.t("remoteLinkPerm")) { openLinkSettings() }.apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
+            })
+        }
         val stTv = tv(remoteStatus.ifEmpty { I18n.t("notConnected") }, 14f, true,
             if (remoteError) Color.rgb(200, 30, 30) else Color.rgb(21, 24, 28)).apply { setPadding(0, dp(8), 0, dp(6)) }
         remoteStatusView = stTv
@@ -1247,6 +1252,15 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         box.addView(list)
         fillRemoteList()
         return sv
+    }
+
+    private fun openLinkSettings() {
+        val uri = Uri.parse("package:$packageName")
+        if (Build.VERSION.SDK_INT >= 31) {
+            try { startActivity(Intent(android.provider.Settings.ACTION_APP_OPEN_BY_DEFAULT_SETTINGS, uri)); return } catch (_: Exception) {}
+        }
+        try { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri)) }
+        catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
     }
 
     private fun setRemoteStatus(text: String, error: Boolean) {
