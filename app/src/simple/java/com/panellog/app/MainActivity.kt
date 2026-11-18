@@ -99,6 +99,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         "emailHe" to ("📧 Списком на Email" to "📧 כרשימה במייל"),
         "waRu" to ("WhatsApp — иврит + русский" to "וואטסאפ — עברית + רוסית"),
         "pdfHe" to ("PDF" to "PDF"),
+        "pdfEmail" to ("📧 PDF на Email" to "📧 PDF במייל"),
         "pdfRu" to ("PDF — иврит + русский" to "PDF — עברית + רוסית"),
         "logFile" to ("Файл лога (для ИИ)" to "קובץ יומן (ל-AI)"),
         "sendList" to ("Отправить список" to "שלח רשימה"),
@@ -682,17 +683,33 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     // ------------------------------------------------------- Отправить
 
     private fun shareMenu() {
-        val items = arrayOf(t("pdfHe"), t("logFile"))   // только иврит
+        val items = arrayOf(t("pdfHe"), t("pdfEmail"), t("logFile"))   // только иврит
         AlertDialog.Builder(this)
             .setTitle(t("sendTitle") + siteForReport().let { if (it.isNotEmpty()) " · $it" else "" })
             .setItems(items) { _, which ->
                 rememberSite(rawFile)
                 when (which) {
                     0 -> sharePdf(true)
+                    1 -> sharePdfEmail(true)
                     else -> shareLogs()
                 }
             }
             .show()
+    }
+
+    private fun sharePdfEmail(heOnly: Boolean) {
+        val out = makePdf(heOnly) ?: return
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", out)
+        val site = siteForReport()
+        val subj = "G1 Hotelo" + (if (site.isNotEmpty()) " · $site" else "")
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_SUBJECT, subj)
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            selector = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:"))
+        }
+        try { startActivity(send) } catch (_: Exception) { sharePdf(heOnly) }
     }
 
     private fun makePdf(heOnly: Boolean): File? {

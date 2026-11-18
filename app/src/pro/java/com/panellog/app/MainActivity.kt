@@ -1782,8 +1782,8 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         return sv
     }
 
-    /** Тревоги / история → Excel: отправить или скачать. */
-    private fun recXlsx(r: RecordRec, events: List<PanelDecoder.PanelEvent>, total: Int, share: Boolean) {
+    /** Тревоги / история → Excel: отправить, на Email или скачать. */
+    private fun recXlsx(r: RecordRec, events: List<PanelDecoder.PanelEvent>, total: Int, share: Boolean, email: Boolean = false) {
         try {
             val site = store.site(r.siteId)?.name ?: ""
             val pn = store.panel(r.panelId)?.name ?: ""
@@ -1791,7 +1791,11 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             val safe = site.replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_").trim('_').take(40)
             val out = File(store.dataDir(), "G1_${safe}_${r.kind}_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date(r.ts)) + ".xlsx")
             RecordExport.xlsx(events, r.kind, site, pn, total, out)
-            if (share) shareFile(out, mime) else saveToDownloads(out, out.name, mime)
+            when {
+                email -> shareFileEmail(out, mime, RecordExport.title(r.kind, true) + " — " + site)
+                share -> shareFile(out, mime)
+                else -> saveToDownloads(out, out.name, mime)
+            }
         } catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
     }
 
@@ -1832,7 +1836,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             catch (_: Exception) { emptyList() }
         val ev = RecordExport.select(all, if (r.kind == "history") histLimit() else 0)
         // отчёты и отправки — только на иврите
-        val items = listOf("recView", "shareTech", "pdfHe", "xlsHe", "saveHe", "xlsSave", "logFile", "deleteLog")
+        val items = listOf("recView", "shareTech", "pdfHe", "pdfEmail", "xlsHe", "xlsEmail", "saveHe", "xlsSave", "logFile", "deleteLog")
         AlertDialog.Builder(this).setTitle(RecordExport.title(r.kind, I18n.he) + " · " + fmt(r.ts))
             .setItems(items.map { I18n.t(it) }.toTypedArray()) { _, w ->
                 val key = items[w]
@@ -1844,13 +1848,17 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                     key == "deleteLog" -> AlertDialog.Builder(this).setMessage(I18n.t("deleteLog") + "?")
                         .setPositiveButton(I18n.t("delete")) { _, _ -> store.deleteRecord(r); render() }
                         .setNegativeButton(I18n.t("cancel"), null).show()
-                    key.startsWith("xls") -> recXlsx(r, RecordExport.select(all, 0), all.size, key == "xlsHe")   // Excel — вся история
+                    key.startsWith("xls") -> recXlsx(r, RecordExport.select(all, 0), all.size, key == "xlsHe", email = key == "xlsEmail")   // Excel — вся история
                     else -> try {
                         val safe = s.name.replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_").trim('_').take(40)
                         val out = File(store.dataDir(), "G1_${safe}_${r.kind}_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date(r.ts)) +
                             (if (he) "_he" else "_he_ru") + ".pdf")
                         RecordExport.pdf(ev, r.kind, s.name, pn, he, all.size, out)
-                        if (key.startsWith("pdf")) shareFile(out, "application/pdf") else saveToDownloads(out, out.name, "application/pdf")
+                        when (key) {
+                            "pdfEmail" -> shareFileEmail(out, "application/pdf", RecordExport.title(r.kind, true) + " — " + s.name)
+                            "pdfHe" -> shareFile(out, "application/pdf")
+                            else -> saveToDownloads(out, out.name, "application/pdf")
+                        }
                     } catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
                 }
             }.show()
@@ -2199,7 +2207,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         }
         if (parts.isEmpty()) { toast(I18n.t("noLogsForReport")); return }
         val title = { p: Panel -> s.name + (if (store.panels(sid).size > 1) " · " + p.name else "") }
-        val opts = listOf("pdfHe" to true, "saveHe" to true)   // только иврит
+        val opts = listOf("pdfHe" to true, "pdfEmail" to true, "saveHe" to true)   // только иврит
         AlertDialog.Builder(this).setTitle(I18n.t("sendAsIs"))
             .setItems((opts.map { I18n.t(it.first) } + I18n.t("shareTech")).toTypedArray()) { _, w ->
                 if (w >= opts.size) { shareTechMenu(lastLogs); return@setItems }
@@ -2213,7 +2221,11 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                     val heads = HashMap<Int, String>()
                     if (parts.size > 1) { var idx = 0; for ((p, ev) in parts) { heads[idx] = p.name; idx += ev.size } }
                     ReportExport.writePdf(events, out, if (parts.size == 1) name else s.name, he, heads)
-                    if (key.startsWith("pdf")) shareFile(out, "application/pdf") else saveToDownloads(out, out.name, "application/pdf")
+                    when (key) {
+                        "pdfEmail" -> shareFileEmail(out, "application/pdf", "G1 Hotelo · " + s.name)
+                        "pdfHe" -> shareFile(out, "application/pdf")
+                        else -> saveToDownloads(out, out.name, "application/pdf")
+                    }
                 } catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
             }.show()
     }
@@ -2269,7 +2281,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         if (!I18n.he) AutoTr.request(store.faults(sid).flatMap { listOf(it.label, it.label2, it.node, it.problem) })
         val r = store.period(sid, panelId, fromFor) ?: run { toast(I18n.t("noLogsForReport")); return }
         // Иврит в настройках — только иврит; русский — выбор: иврит или иврит + перевод
-        val opts = listOf("pdfHe" to true, "pdfPhHe" to true, "xlsHe" to true, "saveHe" to true, "xlsSave" to true)   // только иврит
+        val opts = listOf("pdfHe" to true, "pdfEmail" to true, "pdfPhHe" to true, "pdfPhEmail" to true, "xlsHe" to true, "xlsEmail" to true, "saveHe" to true, "xlsSave" to true)   // только иврит
         // + «Проделанная работа» — для себя (устранённое), начальнику не отправляется
         val workItems = listOf(I18n.t("workSave"), I18n.t("workShare"))
         val labels = opts.map { I18n.t(it.first) } + workItems + (if (withOther) listOf(I18n.t("otherPeriod")) else emptyList())
@@ -2287,13 +2299,20 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 }
                 if (w > opts.size + 1) { periodMenu(); return@setItems }
                 val (key, heOnly) = opts[w]
+                val subj = "דוח תקלות רכזת — " + r.site.name + " · " + SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(r.to))
                 when {
                     key.startsWith("xls") -> try {
                         val mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         val out = File(store.dataDir(), reportName(r, true).replace("_he.pdf", ".xlsx"))
                         PeriodExport.xlsx(r, store, out)
-                        if (key == "xlsHe") shareFile(out, mime) else saveToDownloads(out, out.name, mime)
+                        when (key) {
+                            "xlsEmail" -> shareFileEmail(out, mime, subj)
+                            "xlsHe" -> shareFile(out, mime)
+                            else -> saveToDownloads(out, out.name, mime)
+                        }
                     } catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
+                    key == "pdfPhEmail" -> makeReportPdf(r, heOnly, photos = true)?.let { shareFileEmail(it, "application/pdf", subj) }
+                    key == "pdfEmail" -> makeReportPdf(r, heOnly)?.let { shareFileEmail(it, "application/pdf", subj) }
                     key.startsWith("pdfPh") -> makeReportPdf(r, heOnly, photos = true)?.let { shareFile(it, "application/pdf") }
                     key.startsWith("pdf") -> makeReportPdf(r, heOnly)?.let { shareFile(it, "application/pdf") }
                     else -> makeReportPdf(r, heOnly)?.let { saveToDownloads(it, it.name, "application/pdf") }
@@ -2328,6 +2347,19 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         startActivity(Intent.createChooser(send, I18n.t("sendWith")))
+    }
+
+    /** Отправка PDF/Excel прямиком в почтовое приложение (Gmail / Outlook / Почта). */
+    private fun shareFileEmail(f: File, mime: String, subject: String) {
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", f)
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = mime
+            putExtra(Intent.EXTRA_SUBJECT, subject)
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            selector = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:"))
+        }
+        try { startActivity(send) } catch (_: Exception) { shareFile(f, mime) }
     }
 
     private fun saveToDownloads(src: File, name: String, mime: String) {
