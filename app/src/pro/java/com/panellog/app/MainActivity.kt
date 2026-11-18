@@ -1832,7 +1832,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             catch (_: Exception) { emptyList() }
         val ev = RecordExport.select(all, if (r.kind == "history") histLimit() else 0)
         // отчёты и отправки — только на иврите
-        val items = listOf("recView", "shareTech", "waHe", "emailHe", "pdfHe", "xlsHe", "saveHe", "xlsSave", "logFile", "deleteLog")
+        val items = listOf("recView", "shareTech", "pdfHe", "xlsHe", "saveHe", "xlsSave", "logFile", "deleteLog")
         AlertDialog.Builder(this).setTitle(RecordExport.title(r.kind, I18n.he) + " · " + fmt(r.ts))
             .setItems(items.map { I18n.t(it) }.toTypedArray()) { _, w ->
                 val key = items[w]
@@ -1844,9 +1844,6 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                     key == "deleteLog" -> AlertDialog.Builder(this).setMessage(I18n.t("deleteLog") + "?")
                         .setPositiveButton(I18n.t("delete")) { _, _ -> store.deleteRecord(r); render() }
                         .setNegativeButton(I18n.t("cancel"), null).show()
-                    key.startsWith("wa") -> shareWhatsapp(RecordExport.text(ev, r.kind, s.name, pn, he, all.size))
-                    key.startsWith("email") -> shareEmail(RecordExport.title(r.kind, true) + " — " + s.name,
-                        RecordExport.text(ev, r.kind, s.name, pn, he, all.size))
                     key.startsWith("xls") -> recXlsx(r, RecordExport.select(all, 0), all.size, key == "xlsHe")   // Excel — вся история
                     else -> try {
                         val safe = s.name.replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_").trim('_').take(40)
@@ -2202,16 +2199,11 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         }
         if (parts.isEmpty()) { toast(I18n.t("noLogsForReport")); return }
         val title = { p: Panel -> s.name + (if (store.panels(sid).size > 1) " · " + p.name else "") }
-        val opts = listOf("waHe" to true, "emailHe" to true, "pdfHe" to true, "saveHe" to true)   // только иврит
+        val opts = listOf("pdfHe" to true, "saveHe" to true)   // только иврит
         AlertDialog.Builder(this).setTitle(I18n.t("sendAsIs"))
             .setItems((opts.map { I18n.t(it.first) } + I18n.t("shareTech")).toTypedArray()) { _, w ->
                 if (w >= opts.size) { shareTechMenu(lastLogs); return@setItems }
                 val (key, he) = opts[w]
-                if (key.startsWith("wa") || key.startsWith("email")) {
-                    val txt = parts.joinToString("\n\n— — —\n\n") { (p, ev) -> ReportExport.whatsappText(ev, title(p), he) }
-                    if (key.startsWith("wa")) shareWhatsapp(txt) else shareEmail("G1 Hotelo · " + s.name, txt)
-                    return@setItems
-                }
                 try {
                     val events = parts.flatMap { it.second }
                     val name = if (parts.size == 1) title(parts[0].first) else s.name + " · " + parts.joinToString(", ") { it.first.name }
@@ -2277,7 +2269,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         if (!I18n.he) AutoTr.request(store.faults(sid).flatMap { listOf(it.label, it.label2, it.node, it.problem) })
         val r = store.period(sid, panelId, fromFor) ?: run { toast(I18n.t("noLogsForReport")); return }
         // Иврит в настройках — только иврит; русский — выбор: иврит или иврит + перевод
-        val opts = listOf("waHe" to true, "emailHe" to true, "pdfHe" to true, "pdfPhHe" to true, "xlsHe" to true, "saveHe" to true, "xlsSave" to true)   // только иврит
+        val opts = listOf("pdfHe" to true, "pdfPhHe" to true, "xlsHe" to true, "saveHe" to true, "xlsSave" to true)   // только иврит
         // + «Проделанная работа» — для себя (устранённое), начальнику не отправляется
         val workItems = listOf(I18n.t("workSave"), I18n.t("workShare"))
         val labels = opts.map { I18n.t(it.first) } + workItems + (if (withOther) listOf(I18n.t("otherPeriod")) else emptyList())
@@ -2296,9 +2288,6 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 if (w > opts.size + 1) { periodMenu(); return@setItems }
                 val (key, heOnly) = opts[w]
                 when {
-                    key.startsWith("wa") -> shareWhatsapp(PeriodExport.whatsapp(r, store, heOnly))
-                    key.startsWith("email") -> shareEmail("דוח תקלות רכזת — " + r.site.name + " · " + SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(r.to)),
-                        PeriodExport.whatsapp(r, store, heOnly))
                     key.startsWith("xls") -> try {
                         val mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         val out = File(store.dataDir(), reportName(r, true).replace("_he.pdf", ".xlsx"))
@@ -2330,23 +2319,6 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             if (wa.resolveActivity(packageManager) != null) startActivity(wa)
             else startActivity(Intent.createChooser(send, I18n.t("sendWith")))
         } catch (_: Exception) { startActivity(Intent.createChooser(send, I18n.t("sendWith"))) }
-    }
-
-    private fun shareEmail(subject: String, text: String) {
-        val body = text.replace(Regex("\\*([^*]+)\\*"), "$1")
-        val mail = Intent(Intent.ACTION_SENDTO).apply {
-            data = Uri.parse("mailto:")
-            putExtra(Intent.EXTRA_SUBJECT, subject)
-            putExtra(Intent.EXTRA_TEXT, body)
-        }
-        try {
-            startActivity(Intent.createChooser(mail, I18n.t("sendWith")))
-        } catch (_: Exception) {
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"; putExtra(Intent.EXTRA_SUBJECT, subject); putExtra(Intent.EXTRA_TEXT, body)
-            }
-            startActivity(Intent.createChooser(send, I18n.t("sendWith")))
-        }
     }
 
     private fun shareFile(f: File, mime: String) {
