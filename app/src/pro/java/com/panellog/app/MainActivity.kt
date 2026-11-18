@@ -122,7 +122,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     private val liveFlush = Runnable { flushLivePush() }
 
     // удалённый приём событий с первого телефона (ntfy.sh)
-    private data class RemoteMsg(val id: String, val ts: Long, val text: String)
+    private data class RemoteMsg(val id: String, val ts: Long, val text: String, var hint: String = "")
     @Volatile private var remoteRunning = false
     @Volatile private var remoteConn: java.net.HttpURLConnection? = null
     private val remoteMsgs = ArrayList<RemoteMsg>()
@@ -131,6 +131,10 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     private var remoteStatus = ""
     private var remoteError = false
     private var remoteReadyForSound = false
+    private var remoteSiteId: String? = null
+    private var remoteBaseAddrs: Set<String> = emptySet()
+    private val remoteActiveAddrs = LinkedHashSet<String>()
+    private var remoteSiteBtn: Button? = null
     private var remoteStatusView: TextView? = null
     private var remoteListView: LinearLayout? = null
     private var remoteBtnView: Button? = null
@@ -244,7 +248,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         title = getString(R.string.app_name)
         faultListBox = null
         captureStatusView = null; captureCounterView = null; capturePreview = null; captureConnectBtn = null
-        remoteStatusView = null; remoteListView = null; remoteBtnView = null
+        remoteStatusView = null; remoteListView = null; remoteBtnView = null; remoteSiteBtn = null
         val v = when (scr) {
             Scr.HOME -> homeView()
             Scr.SITE -> siteView()
@@ -1131,23 +1135,26 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         }
     }
 
-    /** Сверка живого события со стартовым списком ошибок в памяти (для подсказки в уведомлении). */
-    private fun liveCompareHint(addr: String, ev: String): String {
-        if (addr.isEmpty() || liveBaseAddrs.isEmpty()) return ""
+    /** Сверка события со списком адресов в памяти (базу не меняет). */
+    private fun compareHint(addr: String, ev: String, base: Set<String>, active: MutableSet<String>): String {
+        if (addr.isEmpty() || base.isEmpty()) return ""
         return when {
             ev.contains("מנוקה") -> {
-                if (liveActiveAddrs.remove(addr)) I18n.f("liveClearedIn", liveActiveAddrs.size, liveBaseAddrs.size)
-                else I18n.f("liveClearedOut", liveActiveAddrs.size, liveBaseAddrs.size)
+                if (active.remove(addr)) I18n.f("liveClearedIn", active.size, base.size)
+                else I18n.f("liveClearedOut", active.size, base.size)
             }
-            ev.contains("אישור") -> I18n.f("liveAckFault", liveActiveAddrs.size, liveBaseAddrs.size)
+            ev.contains("אישור") -> I18n.f("liveAckFault", active.size, base.size)
             ev.contains("תקלה") -> {
-                liveActiveAddrs.add(addr)
-                if (addr in liveBaseAddrs) I18n.f("liveKnownFault", liveActiveAddrs.size, liveBaseAddrs.size)
-                else I18n.f("liveNewFault", liveActiveAddrs.size, liveBaseAddrs.size)
+                active.add(addr)
+                if (addr in base) I18n.f("liveKnownFault", active.size, base.size)
+                else I18n.f("liveNewFault", active.size, base.size)
             }
             else -> ""
         }
     }
+
+    private fun liveCompareHint(addr: String, ev: String): String =
+        compareHint(addr, ev, liveBaseAddrs, liveActiveAddrs)
 
     private fun cleanTopic(raw: String): String =
         raw.trim().removePrefix("https://ntfy.sh/").removePrefix("http://ntfy.sh/")
@@ -1215,8 +1222,82 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         prefs().getString("remoteTopic", "")?.takeIf { it.isNotEmpty() }
             ?: prefs().getString("liveTopic", "") ?: ""
 
+    private fun initRemoteTracking(reEval: Boolean = false) {
+        if (remoteSiteId == null) {
+            val saved = prefs().getString("remoteSiteId", null)
+            remoteSiteId = when {
+                saved == null -> prefs().getString("lastSiteId", null)?.takeIf { store.site(it) != null }
+                saved.isEmpty() -> null
+                else -> saved.takeIf { store.site(it) != null }
+            }
+        }
+        remoteActiveAddrs.clear()
+        val sid = remoteSiteId
+        if (sid == null) {
+            remoteBaseAddrs = emptySet()
+        } else {
+            val addrs = store.faults(sid)
+                .filter { it.active && !it.isManual && it.address.isNotEmpty() }
+                .map { it.address }.toSet()
+            remoteBaseAddrs = addrs
+            remoteActiveAddrs.addAll(addrs)
+        }
+        if (reEval) {
+            for (m in remoteMsgs.asReversed()) m.hint = evalRemoteMsg(m.text)
+        }
+        remoteSiteBtn?.text = remoteSiteLabel()
+    }
+
+    private fun remoteSiteLabel(): String {
+        val s = remoteSiteId?.let { store.site(it) }
+        val desc = if (s == null) I18n.t("remoteSiteNone")
+            else I18n.f("remoteSiteCounts", s.name, remoteActiveAddrs.size, remoteBaseAddrs.size)
+        return I18n.f("remoteSitePick", desc)
+    }
+
+    private fun pickRemoteSite() {
+        val sites = store.sites()
+        val labels = listOf(I18n.t("remoteSiteNone")) + sites.map { it.name + " · " + I18n.f("activeN", it.activeCount) }
+        AlertDialog.Builder(this).setTitle(I18n.t("remotePickTitle"))
+            .setItems(labels.toTypedArray()) { _, w ->
+                val sid = if (w == 0) null else sites[w - 1].id
+                remoteSiteId = sid ?: ""
+                prefs().edit().putString("remoteSiteId", sid ?: "").apply()
+                if (sid == null) remoteSiteId = null
+                initRemoteTracking(reEval = true)
+                fillRemoteList()
+            }.show()
+    }
+
+    private fun evalRemoteMsg(msg: String): String {
+        if (remoteSiteId == null && !prefs().contains("remoteSiteId")) {
+            val first = msg.lineSequence().firstOrNull()?.removePrefix("📡 ") ?: ""
+            val name = first.substringBefore(" · ").trim()
+            if (name.isNotEmpty()) {
+                val match = store.sites().firstOrNull { it.name.trim().equals(name, ignoreCase = true) }
+                if (match != null) {
+                    remoteSiteId = match.id
+                    prefs().edit().putString("remoteSiteId", match.id).apply()
+                    initRemoteTracking(reEval = false)
+                }
+            }
+        }
+        if (remoteBaseAddrs.isEmpty()) return ""
+        val addrRx = Regex("(?:N\\d{3})?L\\d{2}[DM]\\d{3}")
+        val hints = ArrayList<String>()
+        for (line in msg.lines()) {
+            val addr = addrRx.find(line)?.value ?: continue
+            val h = compareHint(addr, line, remoteBaseAddrs, remoteActiveAddrs)
+            if (h.isNotEmpty()) hints.add(h)
+        }
+        remoteSiteBtn?.text = remoteSiteLabel()
+        return hints.joinToString("\n")
+    }
+
     private fun remoteView(): View {
         val (sv, box) = page()
+        if (remoteBaseAddrs.isEmpty() && remoteSiteId == null && !prefs().contains("remoteSiteId")) initRemoteTracking()
+        else if (remoteSiteId != null && remoteBaseAddrs.isEmpty()) initRemoteTracking()
         box.addView(tv(I18n.t("remoteTitle"), 20f, true))
         box.addView(tv(I18n.t("remoteHint"), 13f, color = Color.DKGRAY).apply { setPadding(0, dp(4), 0, dp(8)) })
         val topicIn = input(I18n.t("remoteTopicHint"), savedRemoteTopic()).apply {
@@ -1245,9 +1326,14 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         remoteBtnView = connBtn
         box.addView(row(
             connBtn,
-            btn(I18n.t("liveClear")) { remoteMsgs.clear(); remoteSeen.clear(); fillRemoteList() },
+            btn(I18n.t("liveClear")) { remoteMsgs.clear(); remoteSeen.clear(); initRemoteTracking(); fillRemoteList() },
             btn(I18n.t("back")) { stopRemoteStream(); go(Scr.HOME) }
         ).apply { setPadding(0, dp(6), 0, 0) })
+        val sitePickBtn = btn(remoteSiteLabel()) { pickRemoteSite() }.apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
+        }
+        remoteSiteBtn = sitePickBtn
+        box.addView(sitePickBtn)
         if (Build.VERSION.SDK_INT >= 31) {
             box.addView(btn(I18n.t("remoteLinkPerm")) { openLinkSettings() }.apply {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
@@ -1299,6 +1385,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             }
             c.addView(tv(tf.format(Date(m.ts)), 12f, true, Color.DKGRAY))
             c.addView(tv(m.text, 15f).apply { setPadding(0, dp(2), 0, 0) })
+            if (m.hint.isNotEmpty()) c.addView(tv(m.hint, 13f, true, Color.rgb(30, 63, 138)).apply { setPadding(0, dp(4), 0, 0) })
             list.addView(c)
         }
     }
@@ -1351,7 +1438,8 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                             mainHandler.post {
                                 remoteLastId = id
                                 if (remoteSeen.add(id)) {
-                                    remoteMsgs.add(0, RemoteMsg(id, if (ts > 0) ts else System.currentTimeMillis(), msg))
+                                    val hint = evalRemoteMsg(msg)
+                                    remoteMsgs.add(0, RemoteMsg(id, if (ts > 0) ts else System.currentTimeMillis(), msg, hint))
                                     if (remoteMsgs.size > 100) remoteMsgs.removeAt(remoteMsgs.lastIndex)
                                     fillRemoteList()
                                     if (remoteReadyForSound) {
