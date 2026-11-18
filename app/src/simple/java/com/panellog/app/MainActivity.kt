@@ -96,6 +96,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         "sendTitle" to ("Отправить" to "שליחה"),
         "saveTitle" to ("Сохранить на телефон" to "שמירה בטלפון"),
         "waHe" to ("💬 Списком в WhatsApp" to "💬 כרשימה בוואטסאפ"),
+        "emailHe" to ("📧 Списком на Email" to "📧 כרשימה במייל"),
         "waRu" to ("WhatsApp — иврит + русский" to "וואטסאפ — עברית + רוסית"),
         "pdfHe" to ("PDF" to "PDF"),
         "pdfRu" to ("PDF — иврит + русский" to "PDF — עברית + רוסית"),
@@ -681,18 +682,40 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     // ------------------------------------------------------- Отправить
 
     private fun shareMenu() {
-        val items = arrayOf(t("waHe"), t("pdfHe"), t("logFile"))   // только иврит
+        val items = arrayOf(t("waHe"), t("emailHe"), t("pdfHe"), t("logFile"))   // только иврит
         AlertDialog.Builder(this)
             .setTitle(t("sendTitle") + siteForReport().let { if (it.isNotEmpty()) " · $it" else "" })
             .setItems(items) { _, which ->
                 rememberSite(rawFile)
                 when (which) {
                     0 -> shareWhatsapp(true)
-                    1 -> sharePdf(true)
+                    1 -> shareEmail(true)
+                    2 -> sharePdf(true)
                     else -> shareLogs()
                 }
             }
             .show()
+    }
+
+    private fun shareEmail(heOnly: Boolean) {
+        val events = currentEvents()
+        if (events.isEmpty()) { toastLong(t("noEvents")); return }
+        val site = siteForReport()
+        val subj = "G1 Hotelo" + (if (site.isNotEmpty()) " · $site" else "")
+        val body = ReportExport.whatsappText(events, site, heOnly).replace(Regex("\\*([^*]+)\\*"), "$1")
+        val mail = Intent(Intent.ACTION_SENDTO).apply {
+            data = Uri.parse("mailto:")
+            putExtra(Intent.EXTRA_SUBJECT, subj)
+            putExtra(Intent.EXTRA_TEXT, body)
+        }
+        try {
+            startActivity(Intent.createChooser(mail, t("sendList")))
+        } catch (_: Exception) {
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"; putExtra(Intent.EXTRA_SUBJECT, subj); putExtra(Intent.EXTRA_TEXT, body)
+            }
+            startActivity(Intent.createChooser(send, t("sendList")))
+        }
     }
 
     private fun shareWhatsapp(heOnly: Boolean) {

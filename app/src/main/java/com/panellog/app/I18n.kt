@@ -232,6 +232,7 @@ object I18n {
         "sinceDate" to ("С даты…" to "מתאריך…"),
         "allTime" to ("За всё время" to "מתחילת הרישום"),
         "waHe" to ("💬 Списком в WhatsApp" to "💬 כרשימה בוואטסאפ"),
+        "emailHe" to ("📧 Списком на Email" to "📧 כרשימה במייל"),
         "waRu" to ("WhatsApp — иврит + русский" to "וואטסאפ — עברית + רוסית"),
         "pdfHe" to ("PDF" to "PDF"),
         "pdfRu" to ("PDF — иврит + русский" to "PDF — עברית + רוסית"),
