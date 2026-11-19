@@ -267,9 +267,12 @@ object PanelDecoder {
                     date = date, time = time
                 ))
             } else {
+                val evL = seg(line1, 0, 20)
+                val evR = seg(line1, 60, 80)
+                val mirrored = evL.isEmpty() && evR.isNotEmpty()
                 out.add(PanelEvent(
-                    event = seg(line1, 0, 20),
-                    problem = seg(line1, 20, 80),
+                    event = if (mirrored) evR else evL,
+                    problem = if (mirrored) seg(line1, 0, 60) else seg(line1, 20, 80),
                     label = "", label2 = "", zoneLabel = "", zone = "", devType = "",
                     address = "",
                     node = seg(v, 0, 40),
@@ -289,8 +292,29 @@ object PanelDecoder {
         "נחוצה תחזוקה" to "требуется обслуживание (запылён)",
         "תקלה" to "неисправность",
         "מנוקה תקלה" to "неисправность устранена",
-        "אישור תקלה" to "неисправность (квитирована)",
+        "אישור תקלה" to "подтверждена на панели (ACK)",
+        "אזעקה" to "ПОЖАРНАЯ ТРЕВОГА",
+        "אזעקת אש" to "ПОЖАРНАЯ ТРЕВОГА",
+        "אש" to "ПОЖАР",
+        "אישור אזעקה" to "тревога подтверждена (ACK)",
+        "מנוקה אזעקה" to "тревога сброшена",
+        "אזעקה מקדימה" to "предварительная тревога",
+        "פיקוח" to "контроль (Supervisory)",
+        "אישור פיקוח" to "контроль подтверждён (ACK)",
+        "מנוקה פיקוח" to "контроль в норме",
+        "איפוס מערכת" to "сброс системы (Reset)",
+        "השתקה" to "отключение сирен (Silence)",
+        "השתקת צופרים" to "отключение сирен (Silence)",
+        "השתקת אות" to "отключение сирен (Silence)",
+        "בדיקת הליכה" to "тест обхода (Walk Test)",
         "מערכת מאותחלת" to "система в норме",
+        "ALARM" to "ПОЖАРНАЯ ТРЕВОГА",
+        "FIRE ALARM" to "ПОЖАРНАЯ ТРЕВОГА",
+        "ACK ALARM" to "тревога подтверждена (ACK)",
+        "CLEAR ALARM" to "тревога сброшена",
+        "SUPERVISORY" to "контроль (Supervisory)",
+        "SYSTEM RESET" to "сброс системы (Reset)",
+        "SIGNAL SILENCE" to "отключение сирен (Silence)",
         "MISMAT HDWE TYPE" to "тип устройства не совпадает с программой",
         "NVRAM BATTERY TROUBLE" to "батарея памяти CPU",
         "SOFTWARE MISMATCH" to "несовпадение версий ПО",

@@ -1039,8 +1039,11 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         val events = if (d.graphic) PanelDecoder.parse(d.visualLines) else emptyList()
         lastEventCount = events.size
         if (captureKind == "live") {
+            val remBase = liveActiveAddrs.count { it in liveBaseAddrs }
+            val extraNew = liveActiveAddrs.count { it !in liveBaseAddrs }
             val tm = (if (liveLastTime.isNotEmpty()) " · $liveLastTime" else "") +
-                (if (liveBaseAddrs.isNotEmpty()) I18n.f("liveRemain", liveActiveAddrs.size, liveBaseAddrs.size) else "")
+                (if (liveBaseAddrs.isNotEmpty()) I18n.f("liveRemain", remBase, liveBaseAddrs.size) +
+                    (if (extraNew > 0) I18n.f("liveExtraNew", extraNew) else "") else "")
             captureCounterView?.text = I18n.f("liveCounter", bytes.size, d.visualLines.size, events.size, tm)
             if (bytes.isEmpty()) {
                 capturePreview?.text = I18n.t("liveWaiting")
@@ -1093,6 +1096,32 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         beepLive()
     }
 
+    /** Тревожный звук для пожарной тревоги (автоматически останавливается через 2.5 с). */
+    private fun notifyAlarmSound() {
+        try {
+            val uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+                ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+            val r = android.media.RingtoneManager.getRingtone(applicationContext, uri)
+            if (r != null) {
+                r.play()
+                mainHandler.postDelayed({ try { r.stop() } catch (_: Exception) {} }, 2500)
+                return
+            }
+        } catch (_: Exception) {}
+        beepLive()
+    }
+
+    private val fireWordRx = Regex("(^|\\s)אש(\\s|$)")
+    private fun isFireEvent(s: String): Boolean =
+        s.contains("אזעק") || s.contains("ALARM", ignoreCase = true) ||
+            s.contains("FIRE", ignoreCase = true) || fireWordRx.containsMatchIn(s)
+    private fun isClearedEvent(s: String): Boolean =
+        s.contains("מנוקה") || s.contains("CLEAR", ignoreCase = true)
+    private fun isAckEvent(s: String): Boolean =
+        s.contains("אישור") || s.contains("ACK", ignoreCase = true)
+    private fun isTroubleEvent(s: String): Boolean =
+        s.contains("תקלה") || s.contains("TROUBL", ignoreCase = true)
+
     private fun flushLivePush() {
         livePendingBeep = true
         if (captureKind != "live") return
@@ -1107,12 +1136,21 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             liveSentLines = d.visualLines.size
             liveSentBytes = bytes.size
             val evs = PanelDecoder.parse(newVis)
+            var hasFire = false
             val body = if (evs.isNotEmpty()) {
                 evs.joinToString("\n\n") { e ->
                     val ev = e.event.trim()
+                    val evAll = "$ev ${e.problem}".trim()
+                    val fire = isFireEvent(evAll)
+                    val cleared = isClearedEvent(ev)
+                    val ack = isAckEvent(ev)
+                    if (fire && !cleared && !ack) hasFire = true
                     val icon = when {
-                        ev.contains("מנוקה") || ev == "OFF" -> "🟢 "
-                        ev.contains("אישור") -> "🟡 "
+                        fire && cleared -> "🟢 "
+                        fire && ack -> "🟠 "
+                        fire -> "🔥 "
+                        cleared || ev == "OFF" -> "🟢 "
+                        ack -> "🟡 "
                         ev.isNotEmpty() -> "🔴 "
                         else -> ""
                     }
@@ -1120,34 +1158,56 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                         (if (ev.isNotEmpty()) " · " + I18n.panel(ev) else "")
                     val l2 = if (e.problem.isNotEmpty()) I18n.panel(e.problem) else ""
                     val pl = listOf(e.label, e.label2).filter { it.isNotEmpty() }.joinToString(" · ")
-                    val hint = liveCompareHint(e.address, ev)
+                    val hint = liveCompareHint(e.address, evAll)
                     listOf(l1, l2, pl, hint).filter { it.isNotEmpty() }.joinToString("\n")
                 }
             } else {
-                PanelDecoder.logicalLines(newVis).joinToString("\n")
+                val raw = PanelDecoder.logicalLines(newVis).joinToString("\n")
+                if (isFireEvent(raw) && !isClearedEvent(raw) && !isAckEvent(raw)) hasFire = true
+                raw
             }
-            pushNtfy(liveTopic(), "$head\n$body", true)
+            pushNtfy(liveTopic(), "$head\n$body", true, hasFire)
         } else if (!d.graphic && bytes.size > liveSentBytes) {
             val slice = bytes.copyOfRange(liveSentBytes, bytes.size)
             liveSentBytes = bytes.size
             val txt = PanelDecoder.decode(slice).visualLines.joinToString("\n").ifBlank { hexDump(slice) }
-            pushNtfy(liveTopic(), "$head\n$txt", true)
+            val hasFire = isFireEvent(txt) && !isClearedEvent(txt) && !isAckEvent(txt)
+            pushNtfy(liveTopic(), "$head\n$txt", true, hasFire)
         }
     }
 
     /** Сверка события со списком адресов в памяти (базу не меняет). */
     private fun compareHint(addr: String, ev: String, base: Set<String>, active: MutableSet<String>): String {
-        if (addr.isEmpty() || base.isEmpty()) return ""
-        return when {
-            ev.contains("מנוקה") -> {
-                if (active.remove(addr)) I18n.f("liveClearedIn", active.size, base.size)
-                else I18n.f("liveClearedOut", active.size, base.size)
+        if (isFireEvent(ev)) {
+            return when {
+                isClearedEvent(ev) -> I18n.t("liveFireClear")
+                isAckEvent(ev) -> I18n.t("liveFireAck")
+                else -> I18n.t("liveFireAlarm")
             }
-            ev.contains("אישור") -> I18n.f("liveAckFault", active.size, base.size)
-            ev.contains("תקלה") -> {
+        }
+        if (addr.isEmpty() || base.isEmpty()) return ""
+        fun extra(): String {
+            val n = active.count { it !in base }
+            return if (n > 0) I18n.f("liveExtraNew", n) else ""
+        }
+        return when {
+            isClearedEvent(ev) -> {
+                val inBase = addr in base
+                active.remove(addr)
+                val rem = active.count { it in base }
+                (if (inBase) I18n.f("liveClearedIn", rem, base.size)
+                else I18n.f("liveClearedOut", rem, base.size)) + extra()
+            }
+            isAckEvent(ev) -> {
+                val rem = active.count { it in base }
+                I18n.f("liveAckFault", rem, base.size) + extra()
+            }
+            isTroubleEvent(ev) -> {
+                val inBase = addr in base
                 active.add(addr)
-                if (addr in base) I18n.f("liveKnownFault", active.size, base.size)
-                else I18n.f("liveNewFault", active.size, base.size)
+                val rem = active.count { it in base }
+                (if (inBase) I18n.f("liveKnownFault", rem, base.size)
+                else I18n.f("liveNewFault", rem, base.size)) + extra()
             }
             else -> ""
         }
@@ -1160,7 +1220,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         raw.trim().removePrefix("https://ntfy.sh/").removePrefix("http://ntfy.sh/")
             .trim('/').replace(Regex("[^A-Za-z0-9_-]"), "")
 
-    private fun pushNtfy(topic: String, message: String, silent: Boolean) {
+    private fun pushNtfy(topic: String, message: String, silent: Boolean, urgent: Boolean = false) {
         val clean = cleanTopic(topic)
         if (clean.isEmpty()) return
         Thread {
@@ -1171,7 +1231,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                     connectTimeout = 8000
                     readTimeout = 8000
                     setRequestProperty("Content-Type", "text/plain; charset=utf-8")
-                    setRequestProperty("Priority", "high")
+                    setRequestProperty("Priority", if (urgent) "urgent" else "high")
                 }
                 conn.outputStream.use { it.write(message.toByteArray(Charsets.UTF_8)) }
                 val code = conn.responseCode
@@ -1251,7 +1311,12 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     private fun remoteSiteLabel(): String {
         val s = remoteSiteId?.let { store.site(it) }
         val desc = if (s == null) I18n.t("remoteSiteNone")
-            else I18n.f("remoteSiteCounts", s.name, remoteActiveAddrs.size, remoteBaseAddrs.size)
+        else {
+            val remBase = remoteActiveAddrs.count { it in remoteBaseAddrs }
+            val extraNew = remoteActiveAddrs.count { it !in remoteBaseAddrs }
+            I18n.f("remoteSiteCounts", s.name, remBase, remoteBaseAddrs.size) +
+                (if (extraNew > 0) I18n.f("liveExtraNew", extraNew) else "")
+        }
         return I18n.f("remoteSitePick", desc)
     }
 
@@ -1269,6 +1334,23 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             }.show()
     }
 
+    private fun hasEmbeddedFaultHint(msg: String): Boolean =
+        msg.contains("🚨") || msg.contains("📌") || msg.contains("⚠️") ||
+            msg.contains("✅ УШЛА") || msg.contains("✅ טופלה") || msg.contains("✅ Была") ||
+            msg.contains("🟢 УШЛА") || msg.contains("🟢 טופלה") ||
+            msg.contains("🟡 Подтверждена") || msg.contains("🟡 אושרה")
+
+    private fun hasEmbeddedFireHint(msg: String): Boolean =
+        msg.contains("🔥 ПОЖАРНАЯ") || msg.contains("🔥 אזעקת") ||
+            msg.contains("🔥 Тревога") || msg.contains("🔥 אזעקה") ||
+            msg.contains("тревога сброшена") || msg.contains("אזעקת אש אופסה")
+
+    private fun isActiveFireMsg(text: String, hint: String): Boolean {
+        val all = "$text\n$hint"
+        if (all.contains("🔥 ПОЖАРНАЯ") || all.contains("🔥 אזעקת")) return true
+        return text.lines().any { ln -> isFireEvent(ln) && !isClearedEvent(ln) && !isAckEvent(ln) }
+    }
+
     private fun evalRemoteMsg(msg: String): String {
         if (remoteSiteId == null && !prefs().contains("remoteSiteId")) {
             val first = msg.lineSequence().firstOrNull()?.removePrefix("📡 ") ?: ""
@@ -1282,12 +1364,17 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 }
             }
         }
-        if (remoteBaseAddrs.isEmpty()) return ""
+        val skipFault = hasEmbeddedFaultHint(msg)
+        val skipFire = hasEmbeddedFireHint(msg)
         val addrRx = Regex("(?:N\\d{3})?L\\d{2}[DM]\\d{3}")
         val hints = ArrayList<String>()
         for (line in msg.lines()) {
-            val addr = addrRx.find(line)?.value ?: continue
-            val h = compareHint(addr, line, remoteBaseAddrs, remoteActiveAddrs)
+            val addr = addrRx.find(line)?.value
+            val h = when {
+                isFireEvent(line) -> if (skipFire) "" else compareHint(addr ?: "", line, remoteBaseAddrs, remoteActiveAddrs)
+                !skipFault && addr != null && remoteBaseAddrs.isNotEmpty() -> compareHint(addr, line, remoteBaseAddrs, remoteActiveAddrs)
+                else -> ""
+            }
             if (h.isNotEmpty()) hints.add(h)
         }
         remoteSiteBtn?.text = remoteSiteLabel()
@@ -1375,14 +1462,47 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             list.addView(tv(I18n.t("remoteEmpty"), 14f, color = Color.DKGRAY).apply { setPadding(0, dp(10), 0, 0) })
             return
         }
+        fun badge(label: String, bg: Int, fg: Int = Color.WHITE): TextView = tv(label, 12f, true, fg).apply {
+            background = rounded(bg, 8, bg)
+            setPadding(dp(8), dp(3), dp(8), dp(3))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(4)
+            }
+        }
         val tf = SimpleDateFormat("HH:mm:ss", Locale.US)
         for (m in remoteMsgs) {
             val c = card()
+            val all = m.text + "\n" + m.hint
+            var bView: TextView? = null
             when {
-                m.text.contains("🟢") -> c.background = rounded(Color.rgb(235, 250, 238), 12, Color.rgb(175, 225, 185))
-                m.text.contains("🟡") -> c.background = rounded(Color.rgb(255, 248, 225), 12, Color.rgb(235, 210, 145))
-                m.text.contains("🔴") || m.text.contains("⚠️") -> c.background = rounded(Color.rgb(255, 238, 238), 12, Color.rgb(235, 185, 185))
+                isActiveFireMsg(m.text, m.hint) -> {
+                    c.background = rounded(Color.rgb(255, 224, 224), 12, Color.rgb(200, 16, 16))
+                    bView = badge(I18n.t("badgeFire"), Color.rgb(200, 16, 16))
+                }
+                all.contains("🚨") || all.contains("⚠️") -> {
+                    c.background = rounded(Color.rgb(255, 238, 220), 12, Color.rgb(225, 100, 10))
+                    bView = badge(I18n.t("badgeNewFault"), Color.rgb(215, 75, 0))
+                }
+                all.contains("✅ УШЛА ИЗ БАЗЫ") || all.contains("✅ טופלה מהרשימה") || all.contains("✅ Была в списке") -> {
+                    c.background = rounded(Color.rgb(228, 250, 233), 12, Color.rgb(55, 170, 85))
+                    bView = badge(I18n.t("badgeClearedBase"), Color.rgb(22, 130, 55))
+                }
+                all.contains("📌") -> {
+                    c.background = rounded(Color.rgb(253, 240, 241), 12, Color.rgb(210, 145, 155))
+                    bView = badge(I18n.t("badgeKnownFault"), Color.rgb(150, 45, 55))
+                }
+                all.contains("🟢 УШЛА") || all.contains("🟢 טופלה") -> {
+                    c.background = rounded(Color.rgb(240, 250, 242), 12, Color.rgb(165, 215, 175))
+                    bView = badge(I18n.t("badgeClearedOther"), Color.rgb(210, 240, 218), Color.rgb(20, 100, 45))
+                }
+                all.contains("🟡") -> {
+                    c.background = rounded(Color.rgb(255, 248, 225), 12, Color.rgb(225, 195, 115))
+                    bView = badge(I18n.t("badgeAck"), Color.rgb(180, 110, 10))
+                }
+                all.contains("🟢") || all.contains("✅") -> c.background = rounded(Color.rgb(235, 250, 238), 12, Color.rgb(175, 225, 185))
+                all.contains("🔴") -> c.background = rounded(Color.rgb(255, 238, 238), 12, Color.rgb(235, 185, 185))
             }
+            if (bView != null) c.addView(bView)
             c.addView(tv(tf.format(Date(m.ts)), 12f, true, Color.DKGRAY))
             c.addView(tv(m.text, 15f).apply { setPadding(0, dp(2), 0, 0) })
             if (m.hint.isNotEmpty()) c.addView(tv(m.hint, 13f, true, Color.rgb(30, 63, 138)).apply { setPadding(0, dp(4), 0, 0) })
@@ -1399,6 +1519,20 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             } else {
                 @Suppress("DEPRECATION")
                 v.vibrate(250)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun vibrateAlarm() {
+        try {
+            @Suppress("DEPRECATION")
+            val v = getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator ?: return
+            val pattern = longArrayOf(0, 350, 150, 350, 150, 450)
+            if (Build.VERSION.SDK_INT >= 26) {
+                v.vibrate(android.os.VibrationEffect.createWaveform(pattern, -1))
+            } else {
+                @Suppress("DEPRECATION")
+                v.vibrate(pattern, -1)
             }
         } catch (_: Exception) {}
     }
@@ -1443,8 +1577,13 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                                     if (remoteMsgs.size > 100) remoteMsgs.removeAt(remoteMsgs.lastIndex)
                                     fillRemoteList()
                                     if (remoteReadyForSound) {
-                                        notifySound()
-                                        vibrateShort()
+                                        if (isActiveFireMsg(msg, hint)) {
+                                            notifyAlarmSound()
+                                            vibrateAlarm()
+                                        } else {
+                                            notifySound()
+                                            vibrateShort()
+                                        }
                                     }
                                 }
                             }
