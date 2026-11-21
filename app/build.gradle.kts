@@ -11,8 +11,8 @@ android {
         applicationId = "com.panellog.app"
         minSdk = 23
         targetSdk = 34
-        // Смещение +65 сохраняет непрерывность versionCode после переезда с build.yml (дошёл до 65) на build-apk.yml
-        val run = 65 + ((System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()) ?: 1)
+        // Смещение +82 сохраняет непрерывность versionCode после переезда на новый репозиторий (предыдущая сборка дошла до 82)
+        val run = 82 + ((System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()) ?: 1)
         versionCode = run
         versionName = "0.1.$run"
     }

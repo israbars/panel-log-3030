@@ -14,7 +14,7 @@
 - Все сборки подписываются постоянным ключом `app/panellog.keystore`, чтобы не требовалось удалять приложение при установке обновлений.
 - Workflow `.github/workflows/build-apk.yml` автоматически собирает `app-debug.apk` и публикует его в постоянный релиз с тегом `latest`.
 - **Постоянная ссылка на скачивание APK**:
-  `https://github.com/barsik007/panel-log-3030/releases/download/latest/app-debug.apk`
+  `https://github.com/israbars/panel-log-3030/releases/download/latest/app-debug.apk`
 
 ---
 
@@ -43,7 +43,7 @@
 
 4. **В конце ответа пользователю:**
    - Обязательно приложить прямую ссылку на скачивание актуального APK:
-     [Скачать app-debug.apk (latest)](https://github.com/barsik007/panel-log-3030/releases/download/latest/app-debug.apk)
+     [Скачать app-debug.apk (latest)](https://github.com/israbars/panel-log-3030/releases/download/latest/app-debug.apk)
 
 ---
 
