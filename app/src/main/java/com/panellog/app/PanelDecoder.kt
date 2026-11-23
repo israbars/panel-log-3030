@@ -194,7 +194,25 @@ object PanelDecoder {
     }
 
     // Время: «11:41:06» (24 ч) или «11:16:59P» / «10:05:38A» (12 ч, AM/PM — бывает на части панелей)
-    private val TIME = Regex("(\\d{1,2}:\\d\\d:\\d\\d)([AP]?)\\s+'(\\S)\\s+(\\d\\d)\\s+(\\d\\d),?\\s+(\\d{4})(?:\\s+((?:N\\d{3})?L\\d{2}[DM]\\d{3}))?")
+    // Месяц бывает числом («09») или словом на иврите/англ. (напр. «מאי» в визуальном виде «יאמ», «MAY»).
+    private val TIME = Regex("(\\d{1,2}:\\d\\d:\\d\\d)([AP]?)\\s+'(\\S)\\s+(\\S{1,4})\\s+(\\S{1,4}),?\\s+(\\d{4})(?:\\s+((?:N\\d{3})?L\\d{2}[DM]\\d{3}))?")
+
+    private val MONTHS: Map<String, String> = mapOf(
+        "ינו" to "01", "פבר" to "02", "מרץ" to "03", "מרס" to "03",
+        "אפר" to "04", "מאי" to "05", "יונ" to "06", "יוני" to "06",
+        "יול" to "07", "יולי" to "07", "אוג" to "08", "ספט" to "09",
+        "אוק" to "10", "נוב" to "11", "דצמ" to "12",
+        "JAN" to "01", "FEB" to "02", "MAR" to "03", "APR" to "04",
+        "MAY" to "05", "JUN" to "06", "JUL" to "07", "AUG" to "08",
+        "SEP" to "09", "OCT" to "10", "NOV" to "11", "DEC" to "12"
+    )
+
+    private fun monthFromWord(raw: String): String? {
+        val w = logical(raw).trim().uppercase()
+        MONTHS[w]?.let { return it }
+        if (w.length >= 3) MONTHS[w.substring(0, 3)]?.let { return it }
+        return null
+    }
 
     /** «11:16:59» + «P» → «23:16:59»; без буквы — как есть. */
     private fun time24(t: String, ap: String): String {
@@ -228,12 +246,25 @@ object PanelDecoder {
             val line1 = a ?: ""
             val addrRight = m.groupValues[7]
             val addrLeft = if (addrRight.isEmpty()) ADDR.find(v.substring(0, m.range.first))?.value ?: "" else ""
-            // На первом листе дата была «месяц день,», здесь «день месяц».
-            // Пока считаем «день месяц»; формат уточним по дню недели позже.
-            // «месяц день, год» (с запятой, США) или «день месяц год» (региональный)
+            // «месяц день, год» (с запятой, США) или «день месяц год» (региональный),
+            // причём месяц может быть словом («מאי» / «MAY»).
+            val p4 = m.groupValues[4]
+            val p5 = m.groupValues[5]
+            val m4 = monthFromWord(p4)
+            val m5 = monthFromWord(p5)
             val usFormat = m.value.contains(',')
-            val day = if (usFormat) m.groupValues[5] else m.groupValues[4]
-            val month = if (usFormat) m.groupValues[4] else m.groupValues[5]
+            val day = when {
+                m4 != null -> p5.padStart(2, '0')
+                m5 != null -> p4.padStart(2, '0')
+                usFormat -> p5
+                else -> p4
+            }
+            val month = when {
+                m4 != null -> m4
+                m5 != null -> m5
+                usFormat -> p4
+                else -> p5
+            }
             val date = day + "." + month + "." + m.groupValues[6]
             val time = time24(m.groupValues[1], m.groupValues[2])
             if (addrRight.isNotEmpty()) {
@@ -297,6 +328,7 @@ object PanelDecoder {
         "אזעקת אש" to "ПОЖАРНАЯ ТРЕВОГА",
         "אש" to "ПОЖАР",
         "אישור אזעקה" to "тревога подтверждена (ACK)",
+        "אישור אזעקת אש" to "пожарная тревога подтверждена (ACK)",
         "מנוקה אזעקה" to "тревога сброшена",
         "אזעקה מקדימה" to "предварительная тревога",
         "פיקוח" to "контроль (Supervisory)",
