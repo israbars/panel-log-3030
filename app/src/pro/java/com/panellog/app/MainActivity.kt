@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.app.DatePickerDialog
 import android.app.PendingIntent
+import android.app.TimePickerDialog
 import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
@@ -401,6 +402,49 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             }.show()
     }
 
+    /** Диалог фиксации проверки автодозвона 102 (имя диспетчера + дата и время). */
+    private fun dialerDialog(s: Site) {
+        val b = dialogBox()
+        val whoIn = input(I18n.t("dialerWho"), s.dialerWho).apply { setSingleLine() }
+        val cal = Calendar.getInstance().apply {
+            timeInMillis = if (s.dialerTs > 0L) s.dialerTs else System.currentTimeMillis()
+        }
+        val whenBtn = btn(I18n.f("dialerWhen", fmt(cal.timeInMillis))) {}
+        whenBtn.setOnClickListener {
+            DatePickerDialog(this, { _, y, m, d ->
+                cal.set(y, m, d)
+                TimePickerDialog(this, { _, h, min ->
+                    cal.set(Calendar.HOUR_OF_DAY, h)
+                    cal.set(Calendar.MINUTE, min)
+                    cal.set(Calendar.SECOND, 0)
+                    whenBtn.text = I18n.f("dialerWhen", fmt(cal.timeInMillis))
+                }, cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), true).show()
+            }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
+        }
+        whenBtn.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(8) }
+        b.addView(whoIn)
+        b.addView(whenBtn)
+        val dlg = AlertDialog.Builder(this)
+            .setTitle(I18n.t("dialerTitle"))
+            .setView(b)
+            .setPositiveButton(I18n.t("ok")) { _, _ ->
+                val who = whoIn.text.toString().trim()
+                if (who.isEmpty()) { toast(I18n.t("dialerNeedName")); return@setPositiveButton }
+                store.setDialerCheck(s.id, who, cal.timeInMillis)
+                toast(I18n.t("dialerSaved"))
+                render()
+            }
+            .setNegativeButton(I18n.t("cancel"), null)
+        if (s.dialerWho.isNotBlank() && s.dialerTs > 0L) {
+            dlg.setNeutralButton(I18n.t("dialerClear")) { _, _ ->
+                store.setDialerCheck(s.id, "", 0L)
+                toast(I18n.t("dialerCleared"))
+                render()
+            }
+        }
+        dlg.show()
+    }
+
     // ================================================================ Объект
 
     private fun siteView(): View {
@@ -441,6 +485,16 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         // тревоги и история — отдельная кнопка на экране объекта
         box.addView(btn(I18n.t("recBtn") + store.records(s.id).size.let { if (it > 0) " · $it" else "" }) { go(Scr.RECLIST) }.apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48))
+        })
+        // проверка автодозвона 102 — для включения в отчёт
+        val hasDialer = s.dialerWho.isNotBlank() && s.dialerTs > 0L
+        val dialerLabel = if (hasDialer) "📞 102: ${s.dialerWho} · ${fmt(s.dialerTs)}" else I18n.t("dialerBtn")
+        box.addView(btn(dialerLabel) { dialerDialog(s) }.apply {
+            if (hasDialer) {
+                background = rounded(Color.rgb(232, 248, 236), 10, Color.rgb(120, 195, 140))
+                setTextColor(Color.rgb(18, 95, 42))
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(4) }
         })
 
         val logs = store.logs(s.id).filter { panelSel == null || it.panelId == panelSel }
@@ -2359,7 +2413,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                         (if (he) "_he" else "_he_ru") + "_panel.pdf")
                     val heads = HashMap<Int, String>()
                     if (parts.size > 1) { var idx = 0; for ((p, ev) in parts) { heads[idx] = p.name; idx += ev.size } }
-                    ReportExport.writePdf(events, out, if (parts.size == 1) name else s.name, he, heads)
+                    ReportExport.writePdf(events, out, if (parts.size == 1) name else s.name, he, heads, PeriodExport.dialerLine(s, he))
                     when (key) {
                         "pdfEmail" -> shareFileEmail(out, "application/pdf", "G1 Hotelo · " + s.name)
                         "pdfHe" -> shareFile(out, "application/pdf")

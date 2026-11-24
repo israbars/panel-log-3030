@@ -12,7 +12,8 @@ import java.util.UUID
 
 data class Site(
     val id: String, val name: String, val address: String, val note: String, val panel: String,
-    val created: Long, val lastLogTs: Long = 0, val activeCount: Int = 0
+    val created: Long, val lastLogTs: Long = 0, val activeCount: Int = 0,
+    val dialerWho: String = "", val dialerTs: Long = 0
 )
 
 data class Panel(
@@ -77,10 +78,10 @@ data class PeriodReport(val site: Site, val from: Long, val to: Long, val panels
 }
 
 /** Локальная база: объекты, логи, неисправности, история, фото. ID — UUID (готово к синхронизации). */
-class Store(private val ctx: Context) : SQLiteOpenHelper(ctx, "g1.db", null, 6) {
+class Store(private val ctx: Context) : SQLiteOpenHelper(ctx, "g1.db", null, 7) {
 
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE sites(id TEXT PRIMARY KEY, name TEXT, address TEXT, note TEXT, panel TEXT, created INTEGER)")
+        db.execSQL("CREATE TABLE sites(id TEXT PRIMARY KEY, name TEXT, address TEXT, note TEXT, panel TEXT, created INTEGER, dialer_who TEXT DEFAULT '', dialer_ts INTEGER DEFAULT 0)")
         db.execSQL("CREATE TABLE panels(id TEXT PRIMARY KEY, site_id TEXT, name TEXT, detected TEXT, created INTEGER)")
         db.execSQL("CREATE TABLE logs(id TEXT PRIMARY KEY, site_id TEXT, ts INTEGER, raw TEXT, events INTEGER, panel_id TEXT)")
         db.execSQL(RECORDS_SQL)
@@ -120,6 +121,11 @@ class Store(private val ctx: Context) : SQLiteOpenHelper(ctx, "g1.db", null, 6) 
         if (oldVersion < 5) db.execSQL("ALTER TABLE faults ADD COLUMN hidden INTEGER DEFAULT 0")
         // v5 → v6: тревоги и история — отдельно от неисправностей
         if (oldVersion < 6) db.execSQL(RECORDS_SQL)
+        // v6 → v7: проверка автодозвона 102 (имя диспетчера и дата/время)
+        if (oldVersion < 7) {
+            db.execSQL("ALTER TABLE sites ADD COLUMN dialer_who TEXT DEFAULT ''")
+            db.execSQL("ALTER TABLE sites ADD COLUMN dialer_ts INTEGER DEFAULT 0")
+        }
     }
 
     private val RECORDS_SQL = "CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY, site_id TEXT, panel_id TEXT, kind TEXT, ts INTEGER, raw TEXT, events INTEGER)"
@@ -163,14 +169,22 @@ class Store(private val ctx: Context) : SQLiteOpenHelper(ctx, "g1.db", null, 6) 
     fun sites(): List<Site> = query(
         "SELECT s.id,s.name,s.address,s.note,s.panel,s.created," +
             "(SELECT MAX(ts) FROM logs l WHERE l.site_id=s.id)," +
-            "(SELECT COUNT(*) FROM faults f WHERE f.site_id=s.id AND f.active=1) " +
+            "(SELECT COUNT(*) FROM faults f WHERE f.site_id=s.id AND f.active=1)," +
+            "s.dialer_who,s.dialer_ts " +
             "FROM sites s", emptyArray()
     ) { c ->
         Site(c.getString(0), c.getString(1) ?: "", c.getString(2) ?: "", c.getString(3) ?: "", c.getString(4) ?: "",
-            c.getLong(5), if (c.isNull(6)) 0 else c.getLong(6), c.getInt(7))
+            c.getLong(5), if (c.isNull(6)) 0 else c.getLong(6), c.getInt(7),
+            c.getString(8) ?: "", if (c.isNull(9)) 0 else c.getLong(9))
     }.sortedWith(compareByDescending<Site> { maxOf(it.lastLogTs, it.created) })
 
     fun site(id: String): Site? = sites().firstOrNull { it.id == id }
+
+    fun setDialerCheck(id: String, who: String, ts: Long) {
+        writableDatabase.update("sites", ContentValues().apply {
+            put("dialer_who", who); put("dialer_ts", ts)
+        }, "id=?", arrayOf(id))
+    }
 
     fun addSite(name: String, address: String, note: String): String {
         val id = uuid()

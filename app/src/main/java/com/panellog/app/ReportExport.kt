@@ -78,7 +78,7 @@ object ReportExport {
 
     /** PDF A4: шапка и таблица; текст переносится, иврит выравнивается справа налево. */
     /** heads: индекс события → заголовок раздела (רכזת), нумерация в разделе с 1. */
-    fun writePdf(events: List<PanelDecoder.PanelEvent>, out: File, siteIn: String, he: Boolean, heads: Map<Int, String> = emptyMap()) {
+    fun writePdf(events: List<PanelDecoder.PanelEvent>, out: File, siteIn: String, he: Boolean, heads: Map<Int, String> = emptyMap(), dialerNote: String = "") {
         val pageW = 595; val pageH = 842; val margin = 36
         val doc = PdfDocument()
 
@@ -133,9 +133,10 @@ object ReportExport {
                 page!!.canvas.save(); page!!.canvas.translate(margin.toFloat(), y); t.draw(page!!.canvas); page!!.canvas.restore()
                 y += t.height + 6
                 val sys = events.count { it.isSystem }
-                val meta = if (he)
+                val metaBase = if (he)
                     "תאריך: ${reportDate(events)}   אירועים: ${events.size} (התקנים ${events.size - sys}, מערכת $sys)   רכזת: NFS2-3030"
                     else "Дата: ${reportDate(events)}   Событий: ${events.size} (устройства ${events.size - sys}, системные $sys)   Панель: NFS2-3030"
+                val meta = if (dialerNote.isNotEmpty()) "$metaBase\n$dialerNote" else metaBase
                 val m = layout(meta, metaPaint, pageW - 2 * margin)
                 page!!.canvas.save(); page!!.canvas.translate(margin.toFloat(), y); m.draw(page!!.canvas); page!!.canvas.restore()
                 y += m.height + 10
@@ -270,8 +271,18 @@ object PeriodExport {
                 problem(f, true) + tags(f, ps, true).let { if (it.isEmpty()) "" else " · $it" },
                 place(f, true), done(f, store, true)))
         }
-        Xlsx.write(out, "תקלות", "דוח תקלות רכזת — " + r.site.name, "תאריך: " + d(r.to) + "   תקלות פעילות: " + rows.size,
+        val dl = dialerLine(r.site, true)
+        val sub = "תאריך: " + d(r.to) + "   תקלות פעילות: " + rows.size + (if (dl.isNotEmpty()) "   |   $dl" else "")
+        Xlsx.write(out, "תקלות", "דוח תקלות רכזת — " + r.site.name, sub,
             listOf("#", "רכזת", "כתובת", "אזור", "סוג", "תקלה", "מיקום", "סיבה / הערה"), listOf(5, 12, 12, 8, 22, 26, 38, 45), rows)
+    }
+
+    /** Строка проверки автодозвона 102 для шапки отчёта. */
+    fun dialerLine(site: Site, heOnly: Boolean): String {
+        if (site.dialerWho.isBlank() || site.dialerTs <= 0L) return ""
+        val whenStr = dt(site.dialerTs)
+        return if (heOnly) "בדיקת חייגן 102: התקבל ע״י ${site.dialerWho} · $whenStr"
+        else "בדיקת חייגן 102 / Проверка 102: ${site.dialerWho} · $whenStr"
     }
 
     /** Полное описание одной ошибки — для отправки в WhatsApp вместе с фото. */
@@ -372,6 +383,8 @@ object PeriodExport {
         sb.append("*").append(r.site.name).append("*\n")
         sb.append(titleOf(heOnly, work)).append(" · ").append(if (work) periodText(r) else d(r.to)).append("\n")
         sb.append(countsLine(r, heOnly, work)).append("\n")
+        val dl = dialerLine(r.site, heOnly)
+        if (dl.isNotEmpty()) sb.append("📞 ").append(dl).append("\n")
         for (ps in r.panels) {
         sb.append("\n━━ *").append(ps.panel.name).append("*")
         if (ps.panel.detected.isNotEmpty() && ps.panel.detected != ps.panel.name) sb.append(" (").append(ps.panel.detected).append(")")
@@ -472,6 +485,8 @@ object PeriodExport {
                 append("   Панелей (רכזות): ").append(r.panels.size).append('\n')
                 append(countsLine(r, false, work))
             }
+            val dl = dialerLine(r.site, heOnly)
+            if (dl.isNotEmpty()) append('\n').append(dl)
         }
         val meta = layout(metaText, metaPaint, content, Layout.Alignment.ALIGN_NORMAL)
         drawLayout(meta, margin.toFloat()); y += meta.height + 8
