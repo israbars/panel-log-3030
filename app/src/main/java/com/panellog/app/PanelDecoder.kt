@@ -195,7 +195,7 @@ object PanelDecoder {
 
     // Время: «11:41:06» (24 ч) или «11:16:59P» / «10:05:38A» (12 ч, AM/PM — бывает на части панелей)
     // Месяц бывает числом («09») или словом на иврите/англ. (напр. «מאי» в визуальном виде «יאמ», «MAY»).
-    private val TIME = Regex("(\\d{1,2}:\\d\\d:\\d\\d)([AP]?)\\s+'(\\S)\\s+(\\S{1,4})\\s+(\\S{1,4}),?\\s+(\\d{4})(?:\\s+((?:N\\d{3})?L\\d{2}[DM]\\d{3}))?")
+    private val TIME = Regex("(\\d{1,2}:\\d\\d:\\d\\d)([AP]?)\\s+'(\\S)\\s+(\\S{1,4})\\s+(\\S{1,4}),?\\s+(\\d{4})(?:\\s+((?:N\\d{1,3}\\s*)?L\\d{1,2}[DM]\\d{1,3}))?")
 
     private val MONTHS: Map<String, String> = mapOf(
         "ינו" to "01", "פבר" to "02", "מרץ" to "03", "מרס" to "03",
@@ -224,7 +224,16 @@ object PanelDecoder {
         return String.format("%02d:%s:%s", h, p[1], p[2])
     }
     private val ZONE = Regex("Z\\d{3}")
-    private val ADDR = Regex("(?:N\\d{3})?L\\d{2}[DM]\\d{3}")
+    private val ADDR = Regex("(?:N\\d{1,3}\\s*)?L\\d{1,2}[DM]\\d{1,3}")
+
+    private fun isEventCol(s: String): Boolean {
+        val t = s.trim()
+        if (t.isEmpty()) return false
+        return t.contains("תקלה") || t.contains("אזעק") || t.contains("אישור") || t.contains("מנוקה") ||
+            t.contains("פיקוח") || t.contains("איפוס") || t.contains("השתק") ||
+            t == "ON" || t == "OFF" || t.contains("TROUBL", true) || t.contains("ALARM", true) ||
+            t.contains("CLEAR", true) || t.contains("ACK", true)
+    }
 
     private fun seg(s: String, a: Int, b: Int): String {
         if (a >= s.length) return ""
@@ -244,8 +253,12 @@ object PanelDecoder {
             val m = TIME.find(v)
             if (m == null) { if (v.isNotBlank()) a = v; continue }
             val line1 = a ?: ""
-            val addrRight = m.groupValues[7]
-            val addrLeft = if (addrRight.isEmpty()) ADDR.find(v.substring(0, m.range.first))?.value ?: "" else ""
+            val addrRight = m.groupValues[7].replace(Regex("\\s+"), "")
+            val addrLeft = if (addrRight.isEmpty()) ADDR.find(v.substring(0, m.range.first))?.value?.replace(Regex("\\s+"), "") ?: "" else ""
+            val addrAny = if (addrRight.isEmpty() && addrLeft.isEmpty()) ADDR.find(v)?.value?.replace(Regex("\\s+"), "") ?: "" else ""
+            val evL = seg(line1, 0, 20)
+            val evR = seg(line1, 60, 80)
+            val mirrored = addrLeft.isNotEmpty() || (!isEventCol(evL) && isEventCol(evR)) || (evL.isEmpty() && evR.isNotEmpty())
             // «месяц день, год» (с запятой, США) или «день месяц год» (региональный),
             // причём месяц может быть словом («מאי» / «MAY»).
             val p4 = m.groupValues[4]
@@ -267,9 +280,10 @@ object PanelDecoder {
             }
             val date = day + "." + month + "." + m.groupValues[6]
             val time = time24(m.groupValues[1], m.groupValues[2])
-            if (addrRight.isNotEmpty()) {
+            val foundAddr = addrLeft.ifEmpty { addrRight.ifEmpty { addrAny } }
+            if (addrRight.isNotEmpty() && !mirrored) {
                 out.add(PanelEvent(
-                    event = seg(line1, 0, 20),
+                    event = evL,
                     problem = seg(line1, 20, 40),
                     label = seg(line1, 40, 61),
                     label2 = seg(line1, 61, 80),
@@ -280,30 +294,29 @@ object PanelDecoder {
                     node = "",
                     date = date, time = time
                 ))
-            } else if (addrLeft.isNotEmpty()) {
+            } else if (foundAddr.isNotEmpty() || mirrored) {
                 val tail = v.substring(m.range.last + 1)
                 val zm = ZONE.find(tail)
                 val devType = logical(if (zm != null) tail.substring(0, zm.range.first) else tail)
                 val zoneLabel = if (zm != null) logical(tail.substring(zm.range.last + 1)) else ""
+                val leftTok = v.substring(0, m.range.first).trim()
+                val nodeInfo = if (foundAddr.isEmpty() && leftTok.isNotEmpty()) logical(leftTok) else ""
                 out.add(PanelEvent(
-                    event = seg(line1, 60, 80),
+                    event = evR,
                     problem = seg(line1, 40, 60),
                     label = seg(line1, 20, 40),
                     label2 = seg(line1, 0, 20),
                     zoneLabel = zoneLabel,
                     zone = zm?.value ?: "",
                     devType = devType,
-                    address = addrLeft,
-                    node = "",
+                    address = foundAddr,
+                    node = nodeInfo,
                     date = date, time = time
                 ))
             } else {
-                val evL = seg(line1, 0, 20)
-                val evR = seg(line1, 60, 80)
-                val mirrored = evL.isEmpty() && evR.isNotEmpty()
                 out.add(PanelEvent(
-                    event = if (mirrored) evR else evL,
-                    problem = if (mirrored) seg(line1, 0, 60) else seg(line1, 20, 80),
+                    event = evL,
+                    problem = seg(line1, 20, 80),
                     label = "", label2 = "", zoneLabel = "", zone = "", devType = "",
                     address = "",
                     node = seg(v, 0, 40),

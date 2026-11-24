@@ -1195,10 +1195,9 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         beepLive()
     }
 
-    private val fireWordRx = Regex("(^|\\s)אש(\\s|$)")
     private fun isFireEvent(s: String): Boolean =
         s.contains("אזעק") || s.contains("ALARM", ignoreCase = true) ||
-            s.contains("FIRE", ignoreCase = true) || fireWordRx.containsMatchIn(s)
+            s.contains("FIRE ALARM", ignoreCase = true)
     private fun isClearedEvent(s: String): Boolean =
         s.contains("מנוקה") || s.contains("CLEAR", ignoreCase = true)
     private fun isAckEvent(s: String): Boolean =
@@ -1224,8 +1223,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             val body = if (evs.isNotEmpty()) {
                 evs.joinToString("\n\n") { e ->
                     val ev = e.event.trim()
-                    val evAll = "$ev ${e.problem}".trim()
-                    val fire = isFireEvent(evAll)
+                    val fire = isFireEvent(ev)
                     val cleared = isClearedEvent(ev)
                     val ack = isAckEvent(ev)
                     if (fire && !cleared && !ack) hasFire = true
@@ -1238,12 +1236,18 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                         ev.isNotEmpty() -> "🔴 "
                         else -> ""
                     }
-                    val l1 = icon + (if (e.isSystem) I18n.t("system") else e.address) +
-                        (if (ev.isNotEmpty()) " · " + I18n.panel(ev) else "")
+                    val who = when {
+                        e.address.isNotEmpty() -> e.address
+                        e.node.isNotEmpty() -> e.node
+                        else -> I18n.t("system")
+                    }
+                    val l1 = icon + who + (if (ev.isNotEmpty()) " · " + I18n.panel(ev) else "")
                     val l2 = if (e.problem.isNotEmpty()) I18n.panel(e.problem) else ""
                     val pl = listOf(e.label, e.label2).filter { it.isNotEmpty() }.joinToString(" · ")
-                    val hint = liveCompareHint(e.address, evAll)
-                    listOf(l1, l2, pl, hint).filter { it.isNotEmpty() }.joinToString("\n")
+                    val det = listOf(e.zone, if (e.devType.isNotEmpty()) I18n.devType(e.devType) else "")
+                        .filter { it.isNotEmpty() }.joinToString(" · ")
+                    val hint = liveCompareHint(e.address, ev)
+                    listOf(l1, l2, pl, det, hint).filter { it.isNotEmpty() }.joinToString("\n")
                 }
             } else {
                 val raw = PanelDecoder.logicalLines(newVis).joinToString("\n")
