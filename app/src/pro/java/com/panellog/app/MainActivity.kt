@@ -482,20 +482,21 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             btn(I18n.t("report")) { sendMenu() },
             btn(I18n.t("logsClaude")) { go(Scr.LOGS) }
         ))
-        // тревоги и история — отдельная кнопка на экране объекта
-        box.addView(btn(I18n.t("recBtn") + store.records(s.id).size.let { if (it > 0) " · $it" else "" }) { go(Scr.RECLIST) }.apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48))
-        })
-        // проверка автодозвона 102 — для включения в отчёт
+        // 3-я строка: тревоги и история · проверка 102
         val hasDialer = s.dialerWho.isNotBlank() && s.dialerTs > 0L
-        val dialerLabel = if (hasDialer) "📞 102: ${s.dialerWho} · ${fmt(s.dialerTs)}" else I18n.t("dialerBtn")
-        box.addView(btn(dialerLabel) { dialerDialog(s) }.apply {
+        val dialerLabel = if (hasDialer) "📞 102: ${s.dialerWho}\n${SimpleDateFormat("dd.MM HH:mm", Locale.US).format(Date(s.dialerTs))}"
+            else I18n.t("dialerBtn")
+        val dialerBtn = btn(dialerLabel) { dialerDialog(s) }.apply {
             if (hasDialer) {
+                textSize = 13f
                 background = rounded(Color.rgb(232, 248, 236), 10, Color.rgb(120, 195, 140))
                 setTextColor(Color.rgb(18, 95, 42))
             }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(4) }
-        })
+        }
+        val recBtnView = btn(I18n.t("recBtn") + store.records(s.id).size.let { if (it > 0) " · $it" else "" }) { go(Scr.RECLIST) }.apply {
+            textSize = 13f
+        }
+        box.addView(row(recBtnView, dialerBtn))
 
         val logs = store.logs(s.id).filter { panelSel == null || it.panelId == panelSel }
         val faults = store.faults(s.id).filter { panelSel == null || it.panelId == panelSel || it.panelId.isEmpty() }
