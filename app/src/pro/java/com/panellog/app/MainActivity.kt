@@ -992,11 +992,40 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         liveActiveAddrs.addAll(addrs)
     }
 
+    private fun translitSlug(raw: String): String {
+        val map = mapOf(
+            'а' to "a", 'б' to "b", 'в' to "v", 'г' to "g", 'д' to "d", 'е' to "e", 'ё' to "e",
+            'ж' to "zh", 'з' to "z", 'и' to "i", 'й' to "y", 'к' to "k", 'л' to "l", 'м' to "m",
+            'н' to "n", 'о' to "o", 'п' to "p", 'р' to "r", 'с' to "s", 'т' to "t", 'у' to "u",
+            'ф' to "f", 'х' to "h", 'ц' to "ts", 'ч' to "ch", 'ш' to "sh", 'щ' to "sh", 'ъ' to "",
+            'ы' to "y", 'ь' to "", 'э' to "e", 'ю' to "yu", 'я' to "ya",
+            'א' to "a", 'ב' to "b", 'ג' to "g", 'ד' to "d", 'ה' to "h", 'ו' to "v", 'ז' to "z",
+            'ח' to "h", 'ט' to "t", 'י' to "y", 'כ' to "k", 'ך' to "k", 'ל' to "l", 'מ' to "m",
+            'ם' to "m", 'נ' to "n", 'ן' to "n", 'ס' to "s", 'ע' to "a", 'פ' to "p", 'ף' to "p",
+            'צ' to "ts", 'ץ' to "ts", 'ק' to "k", 'ר' to "r", 'ש' to "sh", 'ת' to "t"
+        )
+        val sb = StringBuilder()
+        for (ch in raw.lowercase()) {
+            when {
+                ch in 'a'..'z' || ch in '0'..'9' -> sb.append(ch)
+                map.containsKey(ch) -> sb.append(map[ch])
+                ch == ' ' || ch == '-' || ch == '_' || ch == '.' -> sb.append('-')
+            }
+        }
+        return sb.toString().replace(Regex("-+"), "-").trim('-').take(40)
+    }
+
+    private fun liveTopicKey(): String = siteId?.let { "liveTopic_$it" } ?: "liveTopic"
+
     private fun liveTopic(): String {
-        var t = prefs().getString("liveTopic", "")?.trim() ?: ""
+        val key = liveTopicKey()
+        var t = prefs().getString(key, "")?.trim() ?: ""
         if (t.isEmpty()) {
-            t = "g1-hotelo-" + (1000..9999).random()
-            prefs().edit().putString("liveTopic", t).apply()
+            val slug = siteId?.let { store.site(it)?.name }?.let { translitSlug(it) } ?: ""
+            t = if (slug.isNotEmpty()) "g1-$slug"
+            else prefs().getString("liveTopic", "")?.trim()?.takeIf { it.isNotEmpty() }
+                ?: ("g1-hotelo-" + (1000..9999).random())
+            prefs().edit().putString(key, t).putString("liveTopic", t).apply()
         }
         return t
     }
@@ -1044,7 +1073,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 override fun afterTextChanged(e: Editable?) {
                     val v = e?.toString()?.trim()?.replace(Regex("[^A-Za-z0-9_-]"), "") ?: ""
                     if (v.isNotEmpty()) {
-                        prefs().edit().putString("liveTopic", v).apply()
+                        prefs().edit().putString(liveTopicKey(), v).putString("liveTopic", v).apply()
                         hintTv.text = I18n.f("liveRemoteHint", v)
                     }
                 }
