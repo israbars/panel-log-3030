@@ -300,7 +300,7 @@ object I18n {
         "dialerCleared" to ("Проверка 102 очищена" to "בדיקת חייגן 102 נוקתה"),
         "dialerNeedName" to ("Введите имя диспетчера" to "הזן את שם המוקדן"),
         // G1 Hotelo AI
-        "aiBtn" to ("🤖 ИИ-анализ (ошибки, тревоги, советы)" to "🤖 ניתוח AI (תקלות, אזעקות, המלצות)"),
+        "aiBtn" to ("🤖 ИИ-анализ" to "🤖 ניתוח AI"),
         "aiTitle" to ("🤖 ИИ-анализ объекта" to "🤖 ניתוח AI לאתר"),
         "aiKeyLabel" to ("🤖 API-ключ ИИ (Gemini / Groq / OpenRouter / OpenAI)" to "🤖 מפתח API ל-AI (Gemini / Groq / OpenRouter)"),
         "aiKeyHint" to ("Ключ: AQ. / AIza / gsk_ / sk-or- / sk-" to "מפתח: AQ. / AIza / gsk_ / sk-or- / sk-"),

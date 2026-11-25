@@ -143,8 +143,8 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     // список неисправностей объекта (перерисовка при поиске)
     private var faultListBox: LinearLayout? = null
 
-    // G1 Hotelo AI (отдельная сборка com.panellog.app.ai)
-    private fun isAiEdition(): Boolean = packageName.endsWith(".ai")
+    // ИИ-анализ доступен и в G1 Hotelo Pro, и в G1 Hotelo AI
+    private fun isAiEdition(): Boolean = true
     private fun aiApiKey(): String = prefs().getString("aiApiKey", "")?.trim() ?: ""
     private fun aiUseGeminiApp(): Boolean = prefs().getBoolean("aiUseGeminiApp", true)
     private var aiAnswer: String = ""
@@ -495,31 +495,19 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             btn(I18n.t("report")) { sendMenu() },
             btn(I18n.t("logsClaude")) { go(Scr.LOGS) }
         ))
-        // 3-я строка: тревоги и история · проверка 102
-        val hasDialer = s.dialerWho.isNotBlank() && s.dialerTs > 0L
-        val dialerLabel = if (hasDialer) "📞 102: ${s.dialerWho}\n${SimpleDateFormat("dd.MM HH:mm", Locale.US).format(Date(s.dialerTs))}"
-            else I18n.t("dialerBtn")
-        val dialerBtn = btn(dialerLabel) { dialerDialog(s) }.apply {
-            if (hasDialer) {
-                textSize = 13f
-                background = rounded(Color.rgb(232, 248, 236), 10, Color.rgb(120, 195, 140))
-                setTextColor(Color.rgb(18, 95, 42))
-            }
-        }
+        // 3-я строка: тревоги и история · ИИ-анализ
         val recBtnView = btn(I18n.t("recBtn") + store.records(s.id).size.let { if (it > 0) " · $it" else "" }) { go(Scr.RECLIST) }.apply {
             textSize = 13f
         }
-        box.addView(row(recBtnView, dialerBtn))
-        if (isAiEdition()) {
-            box.addView(btn(I18n.t("aiBtn")) {
-                aiReturnScr = Scr.SITE
-                go(Scr.AI)
-            }.apply {
-                background = rounded(Color.rgb(79, 70, 229), 10)
-                setTextColor(Color.WHITE)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(6) }
-            })
+        val aiBtnView = btn(I18n.t("aiBtn")) {
+            aiReturnScr = Scr.SITE
+            go(Scr.AI)
+        }.apply {
+            textSize = 13f
+            background = rounded(Color.rgb(79, 70, 229), 10)
+            setTextColor(Color.WHITE)
         }
+        box.addView(row(recBtnView, aiBtnView))
 
         val logs = store.logs(s.id).filter { panelSel == null || it.panelId == panelSel }
         val faults = store.faults(s.id).filter { panelSel == null || it.panelId == panelSel || it.panelId.isEmpty() }
