@@ -17,7 +17,7 @@ import java.util.Locale
  */
 object AiHelper {
 
-    private val MODELS = listOf("gemini-2.5-flash", "gemini-2.0-flash")
+    private val MODELS = listOf("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash")
 
     fun ask(apiKey: String, systemPrompt: String, userPrompt: String): Result<String> {
         val key = apiKey.trim()
@@ -76,7 +76,8 @@ object AiHelper {
                         val msg = try { JSONObject(body).optJSONObject("error")?.optString("message") ?: body.take(200) } catch (_: Exception) { body.take(200) }
                         lastErr = "HTTP $code ($model): $msg"
                         if (code == 401 || code == 403) break // пробуем следующий base (Vertex), если есть
-                        if (code != 404) return Result.failure(IllegalStateException(lastErr))
+                        if (code == 404 || code == 429 || code == 500 || code == 503) continue // авто-переход на запасную модель
+                        return Result.failure(IllegalStateException(lastErr))
                     }
                 } catch (e: Exception) {
                     lastErr = e.message ?: e.javaClass.simpleName
