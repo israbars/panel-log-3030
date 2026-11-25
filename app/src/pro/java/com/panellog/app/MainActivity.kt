@@ -146,6 +146,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     // G1 Hotelo AI (отдельная сборка com.panellog.app.ai)
     private fun isAiEdition(): Boolean = packageName.endsWith(".ai")
     private fun aiApiKey(): String = prefs().getString("aiApiKey", "")?.trim() ?: ""
+    private fun aiUseGeminiApp(): Boolean = prefs().getBoolean("aiUseGeminiApp", true)
     private var aiAnswer: String = ""
     private var aiBusy: Boolean = false
     private var aiReturnScr: Scr = Scr.SITE
@@ -2015,8 +2016,12 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 val ctx = AiHelper.buildEventsContext(RecordExport.title(r.kind, I18n.he), s?.name ?: "", pn, found)
                 val q = if (I18n.he) "נתח את האירועים האלו: זהה דפוסי אזעקות שווא, גלאים בעייתיים או חוזרים, והצע סדר בדיקה."
                     else "Проанализируй эти события (пожарные тревоги/историю): найди повторяющиеся датчики, вероятные причины ложных срабатываний или обрывов, и дай план проверки."
-                go(Scr.AI)
-                runAiQuery("$q\n\n$ctx")
+                if (aiUseGeminiApp()) {
+                    sendPromptToGeminiApp("$q\n\n$ctx")
+                } else {
+                    go(Scr.AI)
+                    runAiQuery("$q\n\n$ctx")
+                }
             }.apply {
                 background = rounded(Color.rgb(79, 70, 229), 10)
                 setTextColor(Color.WHITE)
@@ -2712,10 +2717,31 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         val s = siteId?.let { store.site(it) }
         val (sv, box) = page()
         box.addView(tv(I18n.t("aiTitle") + (if (s != null) " · ${s.name}" else ""), 20f, true))
-        if (aiApiKey().isEmpty()) {
+        // Переключатель режима: в мобильное приложение Gemini (подписка Pro) или через встроенный API
+        val useApp = aiUseGeminiApp()
+        val mAppBtn = btn(I18n.t("aiModeGemini")) {
+            prefs().edit().putBoolean("aiUseGeminiApp", true).apply(); render()
+        }.apply {
+            textSize = 13f
+            if (useApp) { background = rounded(Color.rgb(79, 70, 229), 10); setTextColor(Color.WHITE) }
+            else { background = rounded(Color.WHITE, 10, Color.rgb(195, 201, 209)); setTextColor(Color.rgb(21, 24, 28)) }
+        }
+        val mApiBtn = btn(I18n.t("aiModeApi")) {
+            prefs().edit().putBoolean("aiUseGeminiApp", false).apply(); render()
+        }.apply {
+            textSize = 13f
+            if (!useApp) { background = rounded(Color.rgb(79, 70, 229), 10); setTextColor(Color.WHITE) }
+            else { background = rounded(Color.WHITE, 10, Color.rgb(195, 201, 209)); setTextColor(Color.rgb(21, 24, 28)) }
+        }
+        box.addView(row(mAppBtn, mApiBtn).apply { setPadding(0, dp(8), 0, dp(2)) })
+        if (!useApp && aiApiKey().isEmpty()) {
             box.addView(btn("⚙ " + I18n.t("aiKeyMissing"), true) { settingsDialog() }.apply {
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(8) }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(6) }
             })
+        }
+        fun dispatchAi(prompt: String) {
+            if (aiUseGeminiApp()) sendPromptToGeminiApp(prompt)
+            else runAiQuery(prompt)
         }
         if (s != null) {
             val panels = store.panels(s.id)
@@ -2724,7 +2750,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 val ctx = AiHelper.buildSiteFaultsContext(s, panels, faults, store)
                 val q = if (I18n.he) "נתח את התקלות הפעילות באתר: זהה נתקים/קצרים בלופ, תקלות הארקה, גלאים חוזרים, ותן סדר בדיקה מומלץ לטכנאי."
                     else "Разбери активные неисправности объекта: найди вероятные обрывы/КЗ на шлейфах (Loop), системные проблемы, повторяющиеся датчики и дай понятный пошаговый план проверки на объекте."
-                runAiQuery("$q\n\n$ctx")
+                dispatchAi("$q\n\n$ctx")
             }.apply {
                 background = rounded(Color.rgb(79, 70, 229), 10); setTextColor(Color.WHITE)
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(8) }
@@ -2735,14 +2761,14 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 val ctx = AiHelper.buildRecordsContext(s, panels, recs)
                 val q = if (I18n.he) "נתח את אזעקות האש וההיסטוריה: זהה גלאים עם אזעקות שווא חוזרות, אזורים בעייתיים ומה כדאי לבדוק או לנקות."
                     else "Проанализируй снятые пожарные тревоги и историю: найди датчики с частыми/ложными срабатываниями, проблемные зоны и подскажи, что проверить или заменить."
-                runAiQuery("$q\n\n$ctx")
+                dispatchAi("$q\n\n$ctx")
             }.apply {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
             })
             box.addView(btn(I18n.t("aiActReport")) {
                 val ctx = AiHelper.buildSiteFaultsContext(s, panels, faults, store)
                 val q = "כתוב סיכום מקצועי, קצר ומסודר בעברית למנהל/מהנדס האתר על המצב הנוכחי של מערכת גילוי האש לפי התקלות הפעילות והערות הטכנאי (בלי מידע מיותר)."
-                runAiQuery("$q\n\n$ctx")
+                dispatchAi("$q\n\n$ctx")
             }.apply {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
             })
@@ -2750,11 +2776,11 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         val qIn = input(I18n.t("aiAskHint"), "", true)
         box.addView(qIn)
         box.addView(row(
-            btn(I18n.t("aiAskBtn"), true) {
+            btn(if (useApp) I18n.t("aiModeGemini") else I18n.t("aiAskBtn"), true) {
                 val q = qIn.text.toString().trim()
                 if (q.isEmpty()) return@btn
                 val ctx = if (s != null) AiHelper.buildSiteFaultsContext(s, store.panels(s.id), store.faults(s.id), store) else ""
-                runAiQuery(if (ctx.isNotEmpty()) "$q\n\n$ctx" else q)
+                dispatchAi(if (ctx.isNotEmpty()) "$q\n\n$ctx" else q)
             },
             btn(I18n.t("back")) { go(aiReturnScr) }
         ).apply { setPadding(0, dp(4), 0, 0) })
@@ -2785,6 +2811,35 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             box.addView(ansCard.apply { visibility = View.GONE })
         }
         return sv
+    }
+
+    /** Собрать готовый запрос (роль + задача + ошибки/тревоги), скопировать и открыть в мобильном приложении Gemini. */
+    private fun sendPromptToGeminiApp(prompt: String) {
+        val full = AiHelper.systemPrompt(I18n.he) + "\n\n" + prompt
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("G1 Hotelo AI", full))
+        } catch (_: Exception) {}
+        toast(I18n.t("aiSentGemini"))
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, full)
+        }
+        val geminiPkg = "com.google.android.apps.bard"
+        val direct = Intent(send).setPackage(geminiPkg)
+        try {
+            if (direct.resolveActivity(packageManager) != null) {
+                startActivity(direct)
+                return
+            }
+            val launch = packageManager.getLaunchIntentForPackage(geminiPkg)
+            if (launch != null) {
+                startActivity(launch)
+                return
+            }
+        } catch (_: Exception) {}
+        try { startActivity(Intent.createChooser(send, I18n.t("aiSendTo"))) }
+        catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
     }
 
     private fun runAiQuery(prompt: String) {

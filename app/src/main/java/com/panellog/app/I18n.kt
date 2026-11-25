@@ -317,7 +317,11 @@ object I18n {
         "aiThinking" to ("🤖 ИИ анализирует данные панели…" to "🤖 ה-AI מנתח את נתוני הרכזת…"),
         "aiCopy" to ("📋 Копировать" to "📋 העתק"),
         "aiCopied" to ("Ответ скопирован" to "התשובה הועתקה"),
-        "aiNoRecords" to ("Нет снятых тревог или истории для этого объекта" to "אין קריאות אזעקות או היסטוריה לאתר זה")
+        "aiNoRecords" to ("Нет снятых тревог или истории для этого объекта" to "אין קריאות אזעקות או היסטוריה לאתר זה"),
+        "aiModeGemini" to ("✨ В мой Gemini Pro" to "✨ לאפליקציית Gemini Pro"),
+        "aiModeApi" to ("🔑 Через API" to "🔑 דרך API"),
+        "aiSentGemini" to ("📋 Готовый запрос скопирован — вставьте в Gemini (если не вставился сам)" to "📋 הבקשה הועתקה — הדבק ב-Gemini (אם לא הודבקה אוטומטית)"),
+        "aiSendTo" to ("Открыть в Gemini / ИИ" to "פתח ב-Gemini / AI")
     )
 
     fun t(key: String): String = T[key]?.let { if (he) it.second else it.first } ?: key
