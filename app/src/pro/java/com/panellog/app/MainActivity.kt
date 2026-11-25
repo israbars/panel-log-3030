@@ -2764,7 +2764,8 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         aiStatusView = stTv
         box.addView(stTv)
         val ansCard = card()
-        val ansTv = tv(aiAnswer, 14f).apply { setTextIsSelectable(true) }
+        val cleanAns = aiAnswer.replace("**", "").replace(Regex("(?m)^#{1,4}\\s*"), "").replace(Regex("(?m)^\\s*\\*\\s+"), "• ")
+        val ansTv = tv(cleanAns, 15f)
         aiAnswerView = ansTv
         ansCard.addView(ansTv)
         if (aiAnswer.isNotEmpty()) {

@@ -42,7 +42,7 @@ object AiHelper {
                         put("contents", JSONArray().put(
                             JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))
                         ))
-                        put("generationConfig", JSONObject().put("temperature", 0.3).put("maxOutputTokens", 2048))
+                        put("generationConfig", JSONObject().put("temperature", 0.3).put("maxOutputTokens", 8192))
                     }
                     val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
                         requestMethod = "POST"
@@ -90,12 +90,13 @@ object AiHelper {
     fun systemPrompt(he: Boolean): String = if (he) {
         "אתה מהנדס מומחה למערכות גילוי אש Notifier NFS2-3030 (ישראל, תקן 1220). " +
             "ענה בקצרה, בצורה ברורה ומעשית לטכנאי בשטח: זהה נתקים בלופ (Loop), קצרים, תקלות הארקה, גלאים חוזרים, ואזעקות שווא. " +
-            "כתוב בעברית ברורה עם נקודות מסודרות."
+            "כתוב בעברית ברורה עם נקודות מסודרות, בטקסט נקי ללא סימני Markdown כמו ** או ###."
     } else {
         "Ты опытный инженер по пожарной сигнализации Notifier NFS2-3030 (Израиль, стандарт 1220). " +
             "Отвечай кратко, чётко и практически для техника на объекте: ищи обрывы/КЗ на шлейфах (Loop), замыкания на землю, " +
             "повторяющиеся датчики, причины ложных пожарных тревог и предлагай понятный порядок проверки. " +
-            "Отвечай на русском языке (если просят черновик для клиента — пиши на грамотном иврите)."
+            "Отвечай на русском языке (если просят черновик для клиента — пиши на грамотном иврите). " +
+            "Пиши чистым читаемым текстом без звёздочек Markdown (** или ###), используй списки с «• » и пустые строки."
     }
 
     private fun fmt(ts: Long) = if (ts > 0) SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.US).format(Date(ts)) else ""
