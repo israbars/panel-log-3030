@@ -35,8 +35,10 @@ jobs:
         run: |
           cp app/build/outputs/apk/simple/debug/app-simple-debug.apk app-debug.apk
           cp app/build/outputs/apk/pro/debug/app-pro-debug.apk app-pro-debug.apk
+          cp app/build/outputs/apk/ai/debug/app-ai-debug.apk app-ai-debug.apk
           cp app-debug.apk G1-Hotelo-${{ github.run_number }}.apk
           cp app-pro-debug.apk G1-Hotelo-Pro-${{ github.run_number }}.apk
+          cp app-ai-debug.apk G1-Hotelo-AI-${{ github.run_number }}.apk
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -45,8 +47,10 @@ jobs:
           path: |
             app-debug.apk
             app-pro-debug.apk
+            app-ai-debug.apk
             G1-Hotelo-${{ github.run_number }}.apk
             G1-Hotelo-Pro-${{ github.run_number }}.apk
+            G1-Hotelo-AI-${{ github.run_number }}.apk
 
       - name: Update latest tag
         run: |
@@ -68,7 +72,9 @@ jobs:
           files: |
             app-debug.apk
             app-pro-debug.apk
+            app-ai-debug.apk
             G1-Hotelo-${{ github.run_number }}.apk
             G1-Hotelo-Pro-${{ github.run_number }}.apk
+            G1-Hotelo-AI-${{ github.run_number }}.apk
           make_latest: true
           overwrite_files: true

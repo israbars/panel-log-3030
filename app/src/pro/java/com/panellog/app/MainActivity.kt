@@ -71,7 +71,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         private val BAUDS = intArrayOf(300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200)
     }
 
-    private enum class Scr { HOME, SITE, CAPTURE, FAULT, LOGS, PAPER, RECORD, RECLIST, REMOTE }
+    private enum class Scr { HOME, SITE, CAPTURE, FAULT, LOGS, PAPER, RECORD, RECLIST, REMOTE, AI }
 
     private lateinit var store: Store
     private lateinit var usbManager: UsbManager
@@ -142,6 +142,15 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
 
     // список неисправностей объекта (перерисовка при поиске)
     private var faultListBox: LinearLayout? = null
+
+    // G1 Hotelo AI (отдельная сборка com.panellog.app.ai)
+    private fun isAiEdition(): Boolean = packageName.endsWith(".ai")
+    private fun aiApiKey(): String = prefs().getString("aiApiKey", "")?.trim() ?: ""
+    private var aiAnswer: String = ""
+    private var aiBusy: Boolean = false
+    private var aiReturnScr: Scr = Scr.SITE
+    private var aiAnswerView: TextView? = null
+    private var aiStatusView: TextView? = null
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -237,6 +246,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             Scr.RECORD -> go(Scr.RECLIST)
             Scr.RECLIST -> go(Scr.SITE)
             Scr.REMOTE -> { stopRemoteStream(); go(Scr.HOME) }
+            Scr.AI -> go(aiReturnScr)
         }
     }
 
@@ -250,6 +260,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         faultListBox = null
         captureStatusView = null; captureCounterView = null; capturePreview = null; captureConnectBtn = null
         remoteStatusView = null; remoteListView = null; remoteBtnView = null; remoteSiteBtn = null
+        aiAnswerView = null; aiStatusView = null
         val v = when (scr) {
             Scr.HOME -> homeView()
             Scr.SITE -> siteView()
@@ -260,6 +271,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             Scr.RECORD -> recordView()
             Scr.RECLIST -> recListView()
             Scr.REMOTE -> remoteView()
+            Scr.AI -> aiView()
         }
         if (scr != Scr.SITE) { selMode = false; selected.clear() }
         setContentView(if (scr == Scr.SITE && selMode) withSelBar(v) else v)
@@ -497,6 +509,16 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             textSize = 13f
         }
         box.addView(row(recBtnView, dialerBtn))
+        if (isAiEdition()) {
+            box.addView(btn(I18n.t("aiBtn")) {
+                aiReturnScr = Scr.SITE
+                go(Scr.AI)
+            }.apply {
+                background = rounded(Color.rgb(79, 70, 229), 10)
+                setTextColor(Color.WHITE)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(6) }
+            })
+        }
 
         val logs = store.logs(s.id).filter { panelSel == null || it.panelId == panelSel }
         val faults = store.faults(s.id).filter { panelSel == null || it.panelId == panelSel || it.panelId.isEmpty() }
@@ -1985,6 +2007,22 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         })
         recCount = tv("", 13f, color = Color.rgb(60, 66, 75)).apply { setPadding(0, dp(6), 0, dp(2)) }
         box.addView(recCount)
+        if (isAiEdition()) {
+            box.addView(btn(I18n.t("aiActRec")) {
+                val found = recFiltered()
+                if (found.isEmpty()) { toast(I18n.t("recNothing")); return@btn }
+                aiReturnScr = Scr.RECORD
+                val ctx = AiHelper.buildEventsContext(RecordExport.title(r.kind, I18n.he), s?.name ?: "", pn, found)
+                val q = if (I18n.he) "נתח את האירועים האלו: זהה דפוסי אזעקות שווא, גלאים בעייתיים או חוזרים, והצע סדר בדיקה."
+                    else "Проанализируй эти события (пожарные тревоги/историю): найди повторяющиеся датчики, вероятные причины ложных срабатываний или обрывов, и дай план проверки."
+                go(Scr.AI)
+                runAiQuery("$q\n\n$ctx")
+            }.apply {
+                background = rounded(Color.rgb(79, 70, 229), 10)
+                setTextColor(Color.WHITE)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { bottomMargin = dp(6) }
+            })
+        }
         box.addView(btn(I18n.t("recSendFound")) {
             val found = recFiltered()
             if (found.isEmpty()) toast(I18n.t("recNothing"))
@@ -2631,10 +2669,34 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         box.addView(label(I18n.t("histLimit")))
         val histE = input("50", histLimit().toString()).apply { setSingleLine(); inputType = android.text.InputType.TYPE_CLASS_NUMBER }
         box.addView(histE)
+        var aiKeyE: EditText? = null
+        if (isAiEdition()) {
+            box.addView(label(I18n.t("aiKeyLabel")))
+            val ke = input(I18n.t("aiKeyHint"), aiApiKey()).apply { setSingleLine() }
+            aiKeyE = ke
+            box.addView(ke)
+            box.addView(btn(I18n.t("aiKeyTest")) {
+                val k = ke.text.toString().trim()
+                if (k.isEmpty()) { toast(I18n.t("aiKeyMissing")); return@btn }
+                prefs().edit().putString("aiApiKey", k).apply()
+                toast(I18n.t("aiTesting"))
+                Thread {
+                    val res = AiHelper.ask(k, "", "Reply with one short word: OK")
+                    mainHandler.post {
+                        res.onSuccess { toast(I18n.t("aiKeyOk") + it.take(80)) }
+                        res.onFailure { toast("❌ " + (it.message ?: "Error")) }
+                    }
+                }.start()
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { topMargin = dp(6) }
+            })
+        }
         AlertDialog.Builder(this).setTitle(I18n.t("settings")).setView(box)
             .setPositiveButton(I18n.t("ok")) { _, _ ->
-                prefs().edit().putString("techName", nameE.text.toString().trim())
-                    .putInt("histLimit", histE.text.toString().toIntOrNull()?.coerceIn(0, 100000) ?: 50).apply()
+                val ed = prefs().edit().putString("techName", nameE.text.toString().trim())
+                    .putInt("histLimit", histE.text.toString().toIntOrNull()?.coerceIn(0, 100000) ?: 50)
+                if (aiKeyE != null) ed.putString("aiApiKey", aiKeyE.text.toString().trim())
+                ed.apply()
                 val heSel = lg.checkedRadioButtonId == he.id
                 prefs().edit().putInt("baud", BAUDS[baudSp.selectedItemPosition.coerceIn(0, BAUDS.size - 1)])
                     .putString("lang", if (heSel) "he" else "ru").apply()
@@ -2642,6 +2704,111 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 render()
             }
             .setNegativeButton(I18n.t("cancel"), null).show()
+    }
+
+    // ================================================================ G1 Hotelo AI
+
+    private fun aiView(): View {
+        val s = siteId?.let { store.site(it) }
+        val (sv, box) = page()
+        box.addView(tv(I18n.t("aiTitle") + (if (s != null) " · ${s.name}" else ""), 20f, true))
+        if (aiApiKey().isEmpty()) {
+            box.addView(btn("⚙ " + I18n.t("aiKeyMissing"), true) { settingsDialog() }.apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(8) }
+            })
+        }
+        if (s != null) {
+            val panels = store.panels(s.id)
+            val faults = store.faults(s.id)
+            box.addView(btn(I18n.t("aiActFaults")) {
+                val ctx = AiHelper.buildSiteFaultsContext(s, panels, faults, store)
+                val q = if (I18n.he) "נתח את התקלות הפעילות באתר: זהה נתקים/קצרים בלופ, תקלות הארקה, גלאים חוזרים, ותן סדר בדיקה מומלץ לטכנאי."
+                    else "Разбери активные неисправности объекта: найди вероятные обрывы/КЗ на шлейфах (Loop), системные проблемы, повторяющиеся датчики и дай понятный пошаговый план проверки на объекте."
+                runAiQuery("$q\n\n$ctx")
+            }.apply {
+                background = rounded(Color.rgb(79, 70, 229), 10); setTextColor(Color.WHITE)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(8) }
+            })
+            box.addView(btn(I18n.t("aiActAlarms")) {
+                val recs = store.records(s.id)
+                if (recs.isEmpty()) { toast(I18n.t("aiNoRecords")); return@btn }
+                val ctx = AiHelper.buildRecordsContext(s, panels, recs)
+                val q = if (I18n.he) "נתח את אזעקות האש וההיסטוריה: זהה גלאים עם אזעקות שווא חוזרות, אזורים בעייתיים ומה כדאי לבדוק או לנקות."
+                    else "Проанализируй снятые пожарные тревоги и историю: найди датчики с частыми/ложными срабатываниями, проблемные зоны и подскажи, что проверить или заменить."
+                runAiQuery("$q\n\n$ctx")
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
+            })
+            box.addView(btn(I18n.t("aiActReport")) {
+                val ctx = AiHelper.buildSiteFaultsContext(s, panels, faults, store)
+                val q = "כתוב סיכום מקצועי, קצר ומסודר בעברית למנהל/מהנדס האתר על המצב הנוכחי של מערכת גילוי האש לפי התקלות הפעילות והערות הטכנאי (בלי מידע מיותר)."
+                runAiQuery("$q\n\n$ctx")
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
+            })
+        }
+        val qIn = input(I18n.t("aiAskHint"), "", true)
+        box.addView(qIn)
+        box.addView(row(
+            btn(I18n.t("aiAskBtn"), true) {
+                val q = qIn.text.toString().trim()
+                if (q.isEmpty()) return@btn
+                val ctx = if (s != null) AiHelper.buildSiteFaultsContext(s, store.panels(s.id), store.faults(s.id), store) else ""
+                runAiQuery(if (ctx.isNotEmpty()) "$q\n\n$ctx" else q)
+            },
+            btn(I18n.t("back")) { go(aiReturnScr) }
+        ).apply { setPadding(0, dp(4), 0, 0) })
+        val stTv = tv(if (aiBusy) I18n.t("aiThinking") else "", 14f, true, Color.rgb(79, 70, 229)).apply {
+            setPadding(0, dp(8), 0, dp(4))
+        }
+        aiStatusView = stTv
+        box.addView(stTv)
+        val ansCard = card()
+        val ansTv = tv(aiAnswer, 14f).apply { setTextIsSelectable(true) }
+        aiAnswerView = ansTv
+        ansCard.addView(ansTv)
+        if (aiAnswer.isNotEmpty()) {
+            ansCard.addView(row(
+                btn(I18n.t("aiCopy")) {
+                    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("G1 AI", aiAnswer))
+                    toast(I18n.t("aiCopied"))
+                },
+                btn(I18n.t("send")) {
+                    val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, aiAnswer) }
+                    startActivity(Intent.createChooser(send, I18n.t("sendWith")))
+                }
+            ).apply { setPadding(0, dp(8), 0, 0) })
+            box.addView(ansCard)
+        } else if (!aiBusy) {
+            box.addView(ansCard.apply { visibility = View.GONE })
+        }
+        return sv
+    }
+
+    private fun runAiQuery(prompt: String) {
+        val key = aiApiKey()
+        if (key.isEmpty()) {
+            toast(I18n.t("aiKeyMissing"))
+            settingsDialog()
+            return
+        }
+        aiBusy = true
+        aiStatusView?.text = I18n.t("aiThinking")
+        Thread {
+            val res = AiHelper.ask(key, AiHelper.systemPrompt(I18n.he), prompt)
+            mainHandler.post {
+                aiBusy = false
+                res.onSuccess {
+                    aiAnswer = it
+                    if (scr == Scr.AI) render()
+                }
+                res.onFailure {
+                    aiAnswer = "❌ " + (it.message ?: "Error")
+                    if (scr == Scr.AI) render()
+                }
+            }
+        }.start()
     }
 
     private fun actionsEditor() {

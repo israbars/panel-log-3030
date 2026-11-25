@@ -28,9 +28,10 @@ android {
         }
     }
 
-    // Две программы из одного кода:
+    // Три программы из одного кода:
     //  simple — «G1 Hotelo»: снять ошибки, отправить/скачать (com.panellog.app)
     //  pro    — «G1 Hotelo Pro»: объекты, история, сравнение, карточки (com.panellog.app.pro)
+    //  ai     — «G1 Hotelo AI»: отдельная сборка с ИИ-анализом ошибок и пожарных тревог (com.panellog.app.ai)
     flavorDimensions += "edition"
     productFlavors {
         create("simple") {
@@ -41,6 +42,18 @@ android {
             dimension = "edition"
             applicationIdSuffix = ".pro"
             resValue("string", "app_name", "G1 Hotelo Pro")
+        }
+        create("ai") {
+            dimension = "edition"
+            applicationIdSuffix = ".ai"
+            resValue("string", "app_name", "G1 Hotelo AI")
+        }
+    }
+
+    sourceSets {
+        getByName("ai") {
+            java.srcDirs("src/pro/java")
+            manifest.srcFile("src/pro/AndroidManifest.xml")
         }
     }
 
