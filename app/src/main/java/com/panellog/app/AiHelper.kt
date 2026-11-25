@@ -22,59 +22,66 @@ object AiHelper {
     fun ask(apiKey: String, systemPrompt: String, userPrompt: String): Result<String> {
         val key = apiKey.trim()
         if (key.isEmpty()) return Result.failure(IllegalArgumentException("API key is empty"))
-        val isVertexExpress = key.startsWith("AQ.")
+        // Новые ключи Google AI Studio тоже начинаются на AQ. — всегда сначала пробуем
+        // generativelanguage.googleapis.com, и только при ошибке 401/403/404 для AQ. пробуем Vertex Express.
+        val bases = if (key.startsWith("AQ.")) listOf(
+            "https://generativelanguage.googleapis.com/v1beta/models/",
+            "https://aiplatform.googleapis.com/v1/publishers/google/models/"
+        ) else listOf(
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+        )
         var lastErr = "Unknown error"
-        for (model in MODELS) {
-            val urlStr = if (isVertexExpress)
-                "https://aiplatform.googleapis.com/v1/publishers/google/models/$model:generateContent"
-            else
-                "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
-            try {
-                val payload = JSONObject().apply {
-                    if (systemPrompt.isNotBlank()) {
-                        put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
-                    }
-                    put("contents", JSONArray().put(
-                        JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))
-                    ))
-                    put("generationConfig", JSONObject().put("temperature", 0.3).put("maxOutputTokens", 2048))
-                }
-                val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    doOutput = true
-                    connectTimeout = 15000
-                    readTimeout = 45000
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                    setRequestProperty("x-goog-api-key", key)
-                }
-                conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-                val code = conn.responseCode
-                val body = try {
-                    (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
-                } catch (_: Exception) { "" }
-                conn.disconnect()
-                if (code in 200..299) {
-                    val j = JSONObject(body)
-                    val cands = j.optJSONArray("candidates")
-                    val parts = cands?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
-                    val sb = StringBuilder()
-                    if (parts != null) {
-                        for (i in 0 until parts.length()) {
-                            val t = parts.optJSONObject(i)?.optString("text", "") ?: ""
-                            if (t.isNotEmpty()) sb.append(t)
+        for (base in bases) {
+            for (model in MODELS) {
+                val urlStr = "$base$model:generateContent"
+                try {
+                    val payload = JSONObject().apply {
+                        if (systemPrompt.isNotBlank()) {
+                            put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
                         }
+                        put("contents", JSONArray().put(
+                            JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))
+                        ))
+                        put("generationConfig", JSONObject().put("temperature", 0.3).put("maxOutputTokens", 2048))
                     }
-                    val txt = sb.toString().trim()
-                    if (txt.isNotEmpty()) return Result.success(txt)
-                    lastErr = "Empty response from $model"
-                } else {
-                    val msg = try { JSONObject(body).optJSONObject("error")?.optString("message") ?: body.take(200) } catch (_: Exception) { body.take(200) }
-                    lastErr = "HTTP $code ($model): $msg"
-                    if (code != 404) return Result.failure(IllegalStateException(lastErr))
+                    val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        doOutput = true
+                        connectTimeout = 15000
+                        readTimeout = 45000
+                        setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                        setRequestProperty("x-goog-api-key", key)
+                    }
+                    conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                    val code = conn.responseCode
+                    val body = try {
+                        (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                    } catch (_: Exception) { "" }
+                    conn.disconnect()
+                    if (code in 200..299) {
+                        val j = JSONObject(body)
+                        val cands = j.optJSONArray("candidates")
+                        val parts = cands?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
+                        val sb = StringBuilder()
+                        if (parts != null) {
+                            for (i in 0 until parts.length()) {
+                                val t = parts.optJSONObject(i)?.optString("text", "") ?: ""
+                                if (t.isNotEmpty()) sb.append(t)
+                            }
+                        }
+                        val txt = sb.toString().trim()
+                        if (txt.isNotEmpty()) return Result.success(txt)
+                        lastErr = "Empty response from $model"
+                    } else {
+                        val msg = try { JSONObject(body).optJSONObject("error")?.optString("message") ?: body.take(200) } catch (_: Exception) { body.take(200) }
+                        lastErr = "HTTP $code ($model): $msg"
+                        if (code == 401 || code == 403) break // пробуем следующий base (Vertex), если есть
+                        if (code != 404) return Result.failure(IllegalStateException(lastErr))
+                    }
+                } catch (e: Exception) {
+                    lastErr = e.message ?: e.javaClass.simpleName
+                    return Result.failure(IllegalStateException(lastErr))
                 }
-            } catch (e: Exception) {
-                lastErr = e.message ?: e.javaClass.simpleName
-                return Result.failure(IllegalStateException(lastErr))
             }
         }
         return Result.failure(IllegalStateException(lastErr))
