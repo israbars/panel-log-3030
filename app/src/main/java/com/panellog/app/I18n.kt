@@ -302,8 +302,8 @@ object I18n {
         // G1 Hotelo AI
         "aiBtn" to ("🤖 ИИ-анализ (ошибки, тревоги, советы)" to "🤖 ניתוח AI (תקלות, אזעקות, המלצות)"),
         "aiTitle" to ("🤖 ИИ-анализ объекта" to "🤖 ניתוח AI לאתר"),
-        "aiKeyLabel" to ("🤖 API-ключ ИИ (Gemini / Vertex AI)" to "🤖 מפתח API ל-AI (Gemini / Vertex)"),
-        "aiKeyHint" to ("Вставьте ключ (AQ.... или AIza...)" to "הדבק מפתח (AQ.... או AIza...)"),
+        "aiKeyLabel" to ("🤖 API-ключ ИИ (Gemini / Groq / OpenRouter / OpenAI)" to "🤖 מפתח API ל-AI (Gemini / Groq / OpenRouter)"),
+        "aiKeyHint" to ("Ключ: AQ. / AIza / gsk_ / sk-or- / sk-" to "מפתח: AQ. / AIza / gsk_ / sk-or- / sk-"),
         "aiKeyTest" to ("🧪 Проверить ключ ИИ" to "🧪 בדוק מפתח AI"),
         "aiKeyMissing" to ("Сначала вставьте API-ключ в Настройках (⚙)" to "קודם הדבק מפתח API בהגדרות (⚙)"),
         "aiTesting" to ("Проверяю ключ ИИ…" to "בודק מפתח AI…"),

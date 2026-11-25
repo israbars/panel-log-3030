@@ -10,18 +10,78 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Клиент Gemini API для отдельной сборки G1 Hotelo AI.
- * Поддерживает оба типа ключей Google:
- *  - AQ.xxx  → Vertex AI Express Mode (aiplatform.googleapis.com)
- *  - AIza... → Google AI Studio (generativelanguage.googleapis.com)
+ * Клиент ИИ-API для отдельной сборки G1 Hotelo AI.
+ * Автоматически определяет провайдера по началу ключа:
+ *  - gsk_...    → Groq (api.groq.com)
+ *  - sk-or-...  → OpenRouter (openrouter.ai)
+ *  - sk-...     → OpenAI (api.openai.com)
+ *  - AQ. / AIza → Google Gemini (generativelanguage.googleapis.com / Vertex Express)
  */
 object AiHelper {
 
-    private val MODELS = listOf("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash")
+    private val GEMINI_MODELS = listOf("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash")
+    private val GROQ_MODELS = listOf("openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b")
+    private val OPENROUTER_MODELS = listOf("google/gemini-2.5-flash:free", "meta-llama/llama-3.3-70b-instruct:free", "openrouter/free")
+    private val OPENAI_MODELS = listOf("gpt-4.1-mini", "gpt-4o-mini")
 
     fun ask(apiKey: String, systemPrompt: String, userPrompt: String): Result<String> {
         val key = apiKey.trim()
         if (key.isEmpty()) return Result.failure(IllegalArgumentException("API key is empty"))
+        return when {
+            key.startsWith("gsk_") -> askOpenAiCompat("https://api.groq.com/openai/v1/chat/completions", key, GROQ_MODELS, systemPrompt, userPrompt)
+            key.startsWith("sk-or-") -> askOpenAiCompat("https://openrouter.ai/api/v1/chat/completions", key, OPENROUTER_MODELS, systemPrompt, userPrompt)
+            key.startsWith("sk-") -> askOpenAiCompat("https://api.openai.com/v1/chat/completions", key, OPENAI_MODELS, systemPrompt, userPrompt)
+            else -> askGemini(key, systemPrompt, userPrompt)
+        }
+    }
+
+    private fun askOpenAiCompat(urlStr: String, key: String, models: List<String>, systemPrompt: String, userPrompt: String): Result<String> {
+        var lastErr = "Unknown error"
+        for (model in models) {
+            try {
+                val msgs = JSONArray()
+                if (systemPrompt.isNotBlank()) msgs.put(JSONObject().put("role", "system").put("content", systemPrompt))
+                msgs.put(JSONObject().put("role", "user").put("content", userPrompt))
+                val payload = JSONObject()
+                    .put("model", model)
+                    .put("messages", msgs)
+                    .put("temperature", 0.3)
+                    .put("max_tokens", 4096)
+                val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    connectTimeout = 15000
+                    readTimeout = 45000
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setRequestProperty("Authorization", "Bearer $key")
+                }
+                conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                val body = try {
+                    (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                } catch (_: Exception) { "" }
+                conn.disconnect()
+                if (code in 200..299) {
+                    val j = JSONObject(body)
+                    val msgObj = j.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
+                    val txt = (msgObj?.optString("content", "") ?: "").trim()
+                    if (txt.isNotEmpty()) return Result.success(txt)
+                    lastErr = "Empty response from $model"
+                } else {
+                    val msg = try { JSONObject(body).optJSONObject("error")?.optString("message") ?: body.take(200) } catch (_: Exception) { body.take(200) }
+                    lastErr = "HTTP $code ($model): $msg"
+                    if (code == 404 || code == 429 || code == 500 || code == 503) continue
+                    return Result.failure(IllegalStateException(lastErr))
+                }
+            } catch (e: Exception) {
+                lastErr = e.message ?: e.javaClass.simpleName
+                return Result.failure(IllegalStateException(lastErr))
+            }
+        }
+        return Result.failure(IllegalStateException(lastErr))
+    }
+
+    private fun askGemini(key: String, systemPrompt: String, userPrompt: String): Result<String> {
         // Новые ключи Google AI Studio тоже начинаются на AQ. — всегда сначала пробуем
         // generativelanguage.googleapis.com, и только при ошибке 401/403/404 для AQ. пробуем Vertex Express.
         val bases = if (key.startsWith("AQ.")) listOf(
@@ -32,7 +92,7 @@ object AiHelper {
         )
         var lastErr = "Unknown error"
         for (base in bases) {
-            for (model in MODELS) {
+            for (model in GEMINI_MODELS) {
                 val urlStr = "$base$model:generateContent"
                 try {
                     val payload = JSONObject().apply {
