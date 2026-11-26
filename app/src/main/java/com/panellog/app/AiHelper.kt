@@ -228,6 +228,22 @@ object AiHelper {
         return sb.toString()
     }
 
+    /** Объединённый контекст объекта: активные/устранённые ошибки + снятая история и тревоги (для поиска параллелей). */
+    fun buildFullSiteContext(
+        site: Site,
+        panels: List<Panel>,
+        faults: List<Fault>,
+        recs: List<RecordRec>,
+        store: Store,
+        maxRecordEvents: Int = 80
+    ): String {
+        val sb = StringBuilder(buildSiteFaultsContext(site, panels, faults, store))
+        if (recs.isNotEmpty()) {
+            sb.append('\n').append(buildRecordsContext(site, panels, recs, maxRecordEvents))
+        }
+        return sb.toString()
+    }
+
     fun buildEventsContext(title: String, siteName: String, panelName: String, events: List<PanelDecoder.PanelEvent>): String {
         val sb = StringBuilder()
         sb.append(title).append(" · Объект: ").append(siteName)

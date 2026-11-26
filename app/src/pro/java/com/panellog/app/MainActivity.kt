@@ -2721,22 +2721,28 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         if (s != null) {
             val panels = store.panels(s.id)
             val faults = store.faults(s.id)
+            val recs = store.records(s.id)
             box.addView(btn(I18n.t("aiActFaults")) {
-                val ctx = AiHelper.buildSiteFaultsContext(s, panels, faults, store)
-                val q = if (I18n.he) "נתח את התקלות הפעילות באתר: זהה נתקים/קצרים בלופ, תקלות הארקה, גלאים חוזרים, ותן סדר בדיקה מומלץ לטכנאי."
+                val ctx = AiHelper.buildFullSiteContext(s, panels, faults, recs, store, 80)
+                val q = if (I18n.he) {
+                    if (recs.isNotEmpty()) "נתח את התקלות הפעילות באתר יחד עם היסטוריית התקלות והאזעקות: מצא קשרים והקבלות ביניהן (תקלות חוזרות/צפות באותם לופים או גלאים, תקלות הארקה, נתקים/קצרים) ותן סדר בדיקה מומלץ לטכנאי."
+                    else "נתח את התקלות הפעילות באתר: זהה נתקים/קצרים בלופ, תקלות הארקה, גלאים חוזרים, ותן סדר בדיקה מומלץ לטכנאי."
+                } else {
+                    if (recs.isNotEmpty()) "Разбери активные неисправности объекта вместе со снятой историей и тревогами: проведи параллели между ними (повторяющиеся/плавающие сбои на тех же шлейфах и датчиках, замыкания на землю, обрывы/КЗ) и дай понятный пошаговый план проверки на объекте."
                     else "Разбери активные неисправности объекта: найди вероятные обрывы/КЗ на шлейфах (Loop), системные проблемы, повторяющиеся датчики и дай понятный пошаговый план проверки на объекте."
+                }
                 dispatchAi("$q\n\n$ctx")
             }.apply {
                 background = rounded(Color.rgb(79, 70, 229), 10); setTextColor(Color.WHITE)
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(8) }
             })
             box.addView(btn(I18n.t("aiActAlarms")) {
-                val recs = store.records(s.id)
                 if (recs.isEmpty()) { toast(I18n.t("aiNoRecords")); return@btn }
-                val ctx = AiHelper.buildRecordsContext(s, panels, recs)
-                val q = if (I18n.he) "נתח את אזעקות האש וההיסטוריה: זהה גלאים עם אזעקות שווא חוזרות, אזורים בעייתיים ומה כדאי לבדוק או לנקות."
-                    else "Проанализируй снятые пожарные тревоги и историю: найди датчики с частыми/ложными срабатываниями, проблемные зоны и подскажи, что проверить или заменить."
-                dispatchAi("$q\n\n$ctx")
+                val recCtx = AiHelper.buildRecordsContext(s, panels, recs, 120)
+                val actCtx = if (faults.any { it.active && !it.hidden }) "\n" + AiHelper.buildSiteFaultsContext(s, panels, faults, store) else ""
+                val q = if (I18n.he) "נתח את אזעקות האש וההיסטוריה והצלב אותן עם התקלות הפעילות: זהה גלאים עם אזעקות שווא חוזרות, תקלות צפות, אזורים בעייתיים ומה כדאי לבדוק או לנקות."
+                    else "Проанализируй снятые пожарные тревоги и историю и сопоставь их с активными ошибками: найди датчики с частыми/ложными срабатываниями, плавающие сбои, проблемные зоны и подскажи, что проверить или заменить."
+                dispatchAi("$q\n\n$recCtx$actCtx")
             }.apply {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
             })
@@ -2754,7 +2760,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             btn(if (useApp) I18n.t("aiModeGemini") else I18n.t("aiAskBtn"), true) {
                 val q = qIn.text.toString().trim()
                 if (q.isEmpty()) return@btn
-                val ctx = if (s != null) AiHelper.buildSiteFaultsContext(s, store.panels(s.id), store.faults(s.id), store) else ""
+                val ctx = if (s != null) AiHelper.buildFullSiteContext(s, store.panels(s.id), store.faults(s.id), store.records(s.id), store, 60) else ""
                 dispatchAi(if (ctx.isNotEmpty()) "$q\n\n$ctx" else q)
             },
             btn(I18n.t("back")) { go(aiReturnScr) }
