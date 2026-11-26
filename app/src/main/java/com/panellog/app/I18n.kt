@@ -321,7 +321,10 @@ object I18n {
         "aiModeGemini" to ("✨ В мой Gemini Pro" to "✨ לאפליקציית Gemini Pro"),
         "aiModeApi" to ("🔑 Через API" to "🔑 דרך API"),
         "aiSentGemini" to ("📋 Готовый запрос скопирован — вставьте в Gemini (если не вставился сам)" to "📋 הבקשה הועתקה — הדבק ב-Gemini (אם לא הודבקה אוטומטית)"),
-        "aiSendTo" to ("Открыть в Gemini / ИИ" to "פתח ב-Gemini / AI")
+        "aiSendTo" to ("Открыть в Gemini / ИИ" to "פתח ב-Gemini / AI"),
+        "aiInstrTitle" to ("📝 Мои инструкции для ИИ" to "📝 ההנחיות שלי ל-AI"),
+        "aiInstrHint" to ("Например: группируй ошибки по шлейфам, выделяй повторяющиеся датчики, сначала пиши главную причину…" to "לדוגמה: קבץ תקלות לפי לופים, סמן גלאים חוזרים, רשום קודם את הסיבה העיקרית…"),
+        "aiInstrSaved" to ("Инструкции для ИИ сохранены" to "הנחיות ה-AI נשמרו")
     )
 
     fun t(key: String): String = T[key]?.let { if (he) it.second else it.first } ?: key

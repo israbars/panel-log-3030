@@ -147,6 +147,15 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     private fun isAiEdition(): Boolean = true
     private fun aiApiKey(): String = prefs().getString("aiApiKey", "")?.trim() ?: ""
     private fun aiUseGeminiApp(): Boolean = prefs().getBoolean("aiUseGeminiApp", true)
+    private fun aiCustomPrompt(): String = prefs().getString("aiCustomPrompt", "")?.trim() ?: ""
+    private fun fullSystemPrompt(): String {
+        val base = AiHelper.systemPrompt(I18n.he)
+        val custom = aiCustomPrompt()
+        if (custom.isEmpty()) return base
+        val hdr = if (I18n.he) "הנחיות וכללים נוספים מהטכנאי (יש להתייחס אליהם בניתוח):"
+            else "Дополнительные инструкции и правила от техника (обязательно учитывай при анализе):"
+        return "$base\n\n$hdr\n$custom"
+    }
     private var aiAnswer: String = ""
     private var aiBusy: Boolean = false
     private var aiReturnScr: Scr = Scr.SITE
@@ -2650,7 +2659,15 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         val histE = input("50", histLimit().toString()).apply { setSingleLine(); inputType = android.text.InputType.TYPE_CLASS_NUMBER }
         box.addView(histE)
         var aiKeyE: EditText? = null
+        var aiInstrE: EditText? = null
         if (isAiEdition()) {
+            box.addView(label(I18n.t("aiInstrTitle")))
+            val ie = input(I18n.t("aiInstrHint"), aiCustomPrompt(), true).apply {
+                minLines = 3
+                gravity = Gravity.TOP
+            }
+            aiInstrE = ie
+            box.addView(ie)
             box.addView(label(I18n.t("aiKeyLabel")))
             val ke = input(I18n.t("aiKeyHint"), aiApiKey()).apply { setSingleLine() }
             aiKeyE = ke
@@ -2671,11 +2688,13 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { topMargin = dp(6) }
             })
         }
-        AlertDialog.Builder(this).setTitle(I18n.t("settings")).setView(box)
+        val dlgSv = ScrollView(this).apply { addView(box) }
+        AlertDialog.Builder(this).setTitle(I18n.t("settings")).setView(dlgSv)
             .setPositiveButton(I18n.t("ok")) { _, _ ->
                 val ed = prefs().edit().putString("techName", nameE.text.toString().trim())
                     .putInt("histLimit", histE.text.toString().toIntOrNull()?.coerceIn(0, 100000) ?: 50)
                 if (aiKeyE != null) ed.putString("aiApiKey", aiKeyE.text.toString().trim())
+                if (aiInstrE != null) ed.putString("aiCustomPrompt", aiInstrE.text.toString().trim())
                 ed.apply()
                 val heSel = lg.checkedRadioButtonId == he.id
                 prefs().edit().putInt("baud", BAUDS[baudSp.selectedItemPosition.coerceIn(0, BAUDS.size - 1)])
@@ -2754,6 +2773,12 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
             })
         }
+        val hasCustom = aiCustomPrompt().isNotEmpty()
+        box.addView(btn(I18n.t("aiInstrTitle") + if (hasCustom) " ✓" else "") {
+            aiInstructionsDialog()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { topMargin = dp(6) }
+        })
         val qIn = input(I18n.t("aiAskHint"), "", true)
         box.addView(qIn)
         box.addView(row(
@@ -2794,9 +2819,25 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         return sv
     }
 
+    private fun aiInstructionsDialog() {
+        val box = dialogBox()
+        val ed = input(I18n.t("aiInstrHint"), aiCustomPrompt(), true).apply {
+            minLines = 6
+            gravity = Gravity.TOP
+        }
+        box.addView(ed)
+        AlertDialog.Builder(this).setTitle(I18n.t("aiInstrTitle")).setView(box)
+            .setPositiveButton(I18n.t("ok")) { _, _ ->
+                prefs().edit().putString("aiCustomPrompt", ed.text.toString().trim()).apply()
+                toast(I18n.t("aiInstrSaved"))
+                if (scr == Scr.AI) render()
+            }
+            .setNegativeButton(I18n.t("cancel"), null).show()
+    }
+
     /** Собрать готовый запрос (роль + задача + ошибки/тревоги), скопировать и открыть в мобильном приложении Gemini. */
     private fun sendPromptToGeminiApp(prompt: String) {
-        val full = AiHelper.systemPrompt(I18n.he) + "\n\n" + prompt
+        val full = fullSystemPrompt() + "\n\n" + prompt
         try {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
             cm.setPrimaryClip(android.content.ClipData.newPlainText("G1 Hotelo AI", full))
@@ -2833,7 +2874,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         aiBusy = true
         aiStatusView?.text = I18n.t("aiThinking")
         Thread {
-            val res = AiHelper.ask(key, AiHelper.systemPrompt(I18n.he), prompt)
+            val res = AiHelper.ask(key, fullSystemPrompt(), prompt)
             mainHandler.post {
                 aiBusy = false
                 res.onSuccess {
