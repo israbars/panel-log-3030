@@ -529,19 +529,6 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         }
         if (logs.isNotEmpty()) box.addView(tv(I18n.f("summary", fmt(logs[0].ts), active, fixedN, newN), 13f, color = Color.rgb(60, 66, 75))
             .apply { setPadding(0, dp(10), 0, dp(2)) })
-        // подсказки по шлейфам
-        val pName = panels.associate { it.id to it.name }
-        faults.filter { it.active && !it.isSystem && it.loop.isNotEmpty() }
-            .groupBy { Triple(it.panelId, it.loop, it.problem) }
-            .filter { it.value.size >= 5 }
-            .forEach { (k, v) ->
-                val prefix = if (panels.size > 1) (pName[k.first] ?: "") + " · " else ""
-                box.addView(tv("💡 " + prefix + I18n.f("loopHint", "L" + k.second, v.size, I18n.panel(k.third)), 13f,
-                    color = Color.rgb(122, 74, 0)).apply {
-                    background = rounded(Color.rgb(255, 241, 214), 8); setPadding(dp(8), dp(6), dp(8), dp(6))
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
-                })
-            }
         // поиск
         val search = input(I18n.t("search"), searchText).apply {
             setSingleLine()
