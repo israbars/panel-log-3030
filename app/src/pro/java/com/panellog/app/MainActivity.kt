@@ -2001,7 +2001,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 val q = if (I18n.he) "נתח את האירועים האלו: זהה דפוסי אזעקות שווא, גלאים בעייתיים או חוזרים, והצע סדר בדיקה."
                     else "Проанализируй эти события (пожарные тревоги/историю): найди повторяющиеся датчики, вероятные причины ложных срабатываний или обрывов, и дай план проверки."
                 if (aiUseGeminiApp()) {
-                    sendPromptToGeminiApp("$q\n\n$ctx")
+                    sendPromptToGeminiApp(q, ctx, s?.name ?: "")
                 } else {
                     go(Scr.AI)
                     runAiQuery("$q\n\n$ctx")
@@ -2733,9 +2733,9 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(6) }
             })
         }
-        fun dispatchAi(prompt: String) {
-            if (aiUseGeminiApp()) sendPromptToGeminiApp(prompt)
-            else runAiQuery(prompt)
+        fun dispatchAi(question: String, context: String, siteName: String = "") {
+            if (aiUseGeminiApp()) sendPromptToGeminiApp(question, context, siteName)
+            else runAiQuery(if (context.isNotEmpty()) "$question\n\n$context" else question)
         }
         if (s != null) {
             val panels = store.panels(s.id)
@@ -2750,7 +2750,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                     if (recs.isNotEmpty()) "Разбери активные неисправности объекта вместе со снятой историей и тревогами: проведи параллели между ними (повторяющиеся/плавающие сбои на тех же шлейфах и датчиках, замыкания на землю, обрывы/КЗ) и дай понятный пошаговый план проверки на объекте."
                     else "Разбери активные неисправности объекта: найди вероятные обрывы/КЗ на шлейфах (Loop), системные проблемы, повторяющиеся датчики и дай понятный пошаговый план проверки на объекте."
                 }
-                dispatchAi("$q\n\n$ctx")
+                dispatchAi(q, ctx, s.name)
             }.apply {
                 background = rounded(Color.rgb(79, 70, 229), 10); setTextColor(Color.WHITE)
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(8) }
@@ -2761,14 +2761,14 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 val actCtx = if (faults.any { it.active && !it.hidden }) "\n" + AiHelper.buildSiteFaultsContext(s, panels, faults, store) else ""
                 val q = if (I18n.he) "נתח את אזעקות האש וההיסטוריה והצלב אותן עם התקלות הפעילות: זהה גלאים עם אזעקות שווא חוזרות, תקלות צפות, אזורים בעייתיים ומה כדאי לבדוק או לנקות."
                     else "Проанализируй снятые пожарные тревоги и историю и сопоставь их с активными ошибками: найди датчики с частыми/ложными срабатываниями, плавающие сбои, проблемные зоны и подскажи, что проверить или заменить."
-                dispatchAi("$q\n\n$recCtx$actCtx")
+                dispatchAi(q, recCtx + actCtx, s.name)
             }.apply {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
             })
             box.addView(btn(I18n.t("aiActReport")) {
                 val ctx = AiHelper.buildSiteFaultsContext(s, panels, faults, store)
                 val q = "כתוב סיכום מקצועי, קצר ומסודר בעברית למנהל/מהנדס האתר על המצב הנוכחי של מערכת גילוי האש לפי התקלות הפעילות והערות הטכנאי (בלי מידע מיותר)."
-                dispatchAi("$q\n\n$ctx")
+                dispatchAi(q, ctx, s.name)
             }.apply {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
             })
@@ -2786,7 +2786,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 val q = qIn.text.toString().trim()
                 if (q.isEmpty()) return@btn
                 val ctx = if (s != null) AiHelper.buildFullSiteContext(s, store.panels(s.id), store.faults(s.id), store.records(s.id), store, 60) else ""
-                dispatchAi(if (ctx.isNotEmpty()) "$q\n\n$ctx" else q)
+                dispatchAi(q, ctx, s?.name ?: "")
             },
             btn(I18n.t("back")) { go(aiReturnScr) }
         ).apply { setPadding(0, dp(4), 0, 0) })
@@ -2835,22 +2835,45 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             .setNegativeButton(I18n.t("cancel"), null).show()
     }
 
-    /** Собрать готовый запрос (роль + задача + ошибки/тревоги), скопировать и открыть в мобильном приложении Gemini. */
-    private fun sendPromptToGeminiApp(prompt: String) {
-        val full = fullSystemPrompt() + "\n\n" + prompt
+    /** Отправить в мобильное приложение Gemini: логи/историю файлом .txt (EXTRA_STREAM), а короткую инструкцию — текстом и в буфер. */
+    private fun sendPromptToGeminiApp(question: String, context: String, siteName: String = "") {
+        val fileNote = if (I18n.he) "נתוני הרכזת (תקלות והיסטוריה) מצורפים בקובץ (.txt)."
+            else "Данные панели (ошибки и история) приложены в файле (.txt)."
+        val shortPrompt = fullSystemPrompt() + "\n\n" + question + (if (context.isNotBlank()) "\n\n$fileNote" else "")
         try {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("G1 Hotelo AI", full))
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("G1 Hotelo AI", shortPrompt))
         } catch (_: Exception) {}
-        toast(I18n.t("aiSentGemini"))
+        val geminiPkg = "com.google.android.apps.bard"
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, full)
+            putExtra(Intent.EXTRA_TEXT, shortPrompt)
         }
-        val geminiPkg = "com.google.android.apps.bard"
+        var fileUri: Uri? = null
+        if (context.isNotBlank()) {
+            try {
+                val dir = File(getExternalFilesDir(null), "ai").apply { mkdirs() }
+                dir.listFiles()?.forEach { if (it.isFile && it.name.endsWith(".txt")) it.delete() }
+                val safeSite = siteName.replace(Regex("[^A-Za-z0-9א-תА-Яа-я_-]+"), "_").trim('_').ifEmpty { "panel" }
+                val out = File(dir, "${safeSite}_log.txt")
+                out.writeText(context, Charsets.UTF_8)
+                val uri = FileProvider.getUriForFile(this, "$packageName.files", out)
+                fileUri = uri
+                send.putExtra(Intent.EXTRA_STREAM, uri)
+                send.putExtra(Intent.EXTRA_SUBJECT, out.name)
+                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: Exception) {
+                // fallback: если не удалось создать файл, отправим всё текстом
+                send.putExtra(Intent.EXTRA_TEXT, shortPrompt + "\n\n" + context)
+            }
+        }
+        toast(I18n.t("aiSentGemini"))
         val direct = Intent(send).setPackage(geminiPkg)
         try {
             if (direct.resolveActivity(packageManager) != null) {
+                if (fileUri != null) {
+                    try { grantUriPermission(geminiPkg, fileUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
+                }
                 startActivity(direct)
                 return
             }
