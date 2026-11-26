@@ -294,13 +294,11 @@ object PanelDecoder {
                     node = "",
                     date = date, time = time
                 ))
-            } else if (foundAddr.isNotEmpty() || mirrored) {
+            } else if (foundAddr.isNotEmpty()) {
                 val tail = v.substring(m.range.last + 1)
                 val zm = ZONE.find(tail)
                 val devType = logical(if (zm != null) tail.substring(0, zm.range.first) else tail)
                 val zoneLabel = if (zm != null) logical(tail.substring(zm.range.last + 1)) else ""
-                val leftTok = v.substring(0, m.range.first).trim()
-                val nodeInfo = if (foundAddr.isEmpty() && leftTok.isNotEmpty()) logical(leftTok) else ""
                 out.add(PanelEvent(
                     event = evR,
                     problem = seg(line1, 40, 60),
@@ -310,6 +308,18 @@ object PanelDecoder {
                     zone = zm?.value ?: "",
                     devType = devType,
                     address = foundAddr,
+                    node = "",
+                    date = date, time = time
+                ))
+            } else if (mirrored) {
+                val tail = v.substring(m.range.last + 1)
+                val leftTok = v.substring(0, m.range.first).trim()
+                val nodeInfo = logical(tail).ifEmpty { logical(leftTok) }
+                out.add(PanelEvent(
+                    event = evR,
+                    problem = seg(line1, 0, 60),
+                    label = "", label2 = "", zoneLabel = "", zone = "", devType = "",
+                    address = "",
                     node = nodeInfo,
                     date = date, time = time
                 ))
