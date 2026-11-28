@@ -143,10 +143,8 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     // список неисправностей объекта (перерисовка при поиске)
     private var faultListBox: LinearLayout? = null
 
-    // ИИ-анализ доступен и в G1 Hotelo Pro, и в G1 Hotelo AI
+    // ИИ-анализ доступен и в G1 Hotelo Pro, и в G1 Hotelo AI (отправка .txt + инструкции в Gemini)
     private fun isAiEdition(): Boolean = true
-    private fun aiApiKey(): String = prefs().getString("aiApiKey", "")?.trim() ?: ""
-    private fun aiUseGeminiApp(): Boolean = prefs().getBoolean("aiUseGeminiApp", true)
     private fun aiCustomPrompt(): String = prefs().getString("aiCustomPrompt", "")?.trim() ?: ""
     private fun fullSystemPrompt(): String {
         val base = AiHelper.systemPrompt(I18n.he)
@@ -156,11 +154,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             else "Дополнительные инструкции и правила от техника (обязательно учитывай при анализе):"
         return "$base\n\n$hdr\n$custom"
     }
-    private var aiAnswer: String = ""
-    private var aiBusy: Boolean = false
     private var aiReturnScr: Scr = Scr.SITE
-    private var aiAnswerView: TextView? = null
-    private var aiStatusView: TextView? = null
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -270,7 +264,6 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         faultListBox = null
         captureStatusView = null; captureCounterView = null; capturePreview = null; captureConnectBtn = null
         remoteStatusView = null; remoteListView = null; remoteBtnView = null; remoteSiteBtn = null
-        aiAnswerView = null; aiStatusView = null
         val v = when (scr) {
             Scr.HOME -> homeView()
             Scr.SITE -> siteView()
@@ -2000,12 +1993,7 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 val ctx = AiHelper.buildEventsContext(RecordExport.title(r.kind, I18n.he), s?.name ?: "", pn, found)
                 val q = if (I18n.he) "נתח את האירועים האלו: זהה דפוסי אזעקות שווא, גלאים בעייתיים או חוזרים, והצע סדר בדיקה."
                     else "Проанализируй эти события (пожарные тревоги/историю): найди повторяющиеся датчики, вероятные причины ложных срабатываний или обрывов, и дай план проверки."
-                if (aiUseGeminiApp()) {
-                    sendPromptToGeminiApp(q, ctx, s?.name ?: "")
-                } else {
-                    go(Scr.AI)
-                    runAiQuery("$q\n\n$ctx")
-                }
+                sendPromptToGeminiApp(q, ctx, s?.name ?: "")
             }.apply {
                 background = rounded(Color.rgb(79, 70, 229), 10)
                 setTextColor(Color.WHITE)
@@ -2658,7 +2646,6 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         box.addView(label(I18n.t("histLimit")))
         val histE = input("50", histLimit().toString()).apply { setSingleLine(); inputType = android.text.InputType.TYPE_CLASS_NUMBER }
         box.addView(histE)
-        var aiKeyE: EditText? = null
         var aiInstrE: EditText? = null
         if (isAiEdition()) {
             box.addView(label(I18n.t("aiInstrTitle")))
@@ -2668,32 +2655,12 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
             }
             aiInstrE = ie
             box.addView(ie)
-            box.addView(label(I18n.t("aiKeyLabel")))
-            val ke = input(I18n.t("aiKeyHint"), aiApiKey()).apply { setSingleLine() }
-            aiKeyE = ke
-            box.addView(ke)
-            box.addView(btn(I18n.t("aiKeyTest")) {
-                val k = ke.text.toString().trim()
-                if (k.isEmpty()) { toast(I18n.t("aiKeyMissing")); return@btn }
-                prefs().edit().putString("aiApiKey", k).apply()
-                toast(I18n.t("aiTesting"))
-                Thread {
-                    val res = AiHelper.ask(k, "", "Reply with one short word: OK")
-                    mainHandler.post {
-                        res.onSuccess { toast(I18n.t("aiKeyOk") + it.take(80)) }
-                        res.onFailure { toast("❌ " + (it.message ?: "Error")) }
-                    }
-                }.start()
-            }.apply {
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { topMargin = dp(6) }
-            })
         }
         val dlgSv = ScrollView(this).apply { addView(box) }
         AlertDialog.Builder(this).setTitle(I18n.t("settings")).setView(dlgSv)
             .setPositiveButton(I18n.t("ok")) { _, _ ->
                 val ed = prefs().edit().putString("techName", nameE.text.toString().trim())
                     .putInt("histLimit", histE.text.toString().toIntOrNull()?.coerceIn(0, 100000) ?: 50)
-                if (aiKeyE != null) ed.putString("aiApiKey", aiKeyE.text.toString().trim())
                 if (aiInstrE != null) ed.putString("aiCustomPrompt", aiInstrE.text.toString().trim())
                 ed.apply()
                 val heSel = lg.checkedRadioButtonId == he.id
@@ -2710,33 +2677,29 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
     private fun aiView(): View {
         val s = siteId?.let { store.site(it) }
         val (sv, box) = page()
-        box.addView(tv(I18n.t("aiTitle") + (if (s != null) " · ${s.name}" else ""), 20f, true))
-        // Переключатель режима: в мобильное приложение Gemini (подписка Pro) или через встроенный API
-        val useApp = aiUseGeminiApp()
-        val mAppBtn = btn(I18n.t("aiModeGemini")) {
-            prefs().edit().putBoolean("aiUseGeminiApp", true).apply(); render()
+        val hasCustom = aiCustomPrompt().isNotEmpty()
+        val hdrRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        hdrRow.addView(tv(I18n.t("aiTitle") + (if (s != null) " · ${s.name}" else ""), 20f, true).apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        hdrRow.addView(btn(if (hasCustom) "⚙✓" else "⚙") {
+            aiInstructionsDialog()
         }.apply {
-            textSize = 13f
-            if (useApp) { background = rounded(Color.rgb(79, 70, 229), 10); setTextColor(Color.WHITE) }
-            else { background = rounded(Color.WHITE, 10, Color.rgb(195, 201, 209)); setTextColor(Color.rgb(21, 24, 28)) }
-        }
-        val mApiBtn = btn(I18n.t("aiModeApi")) {
-            prefs().edit().putBoolean("aiUseGeminiApp", false).apply(); render()
-        }.apply {
-            textSize = 13f
-            if (!useApp) { background = rounded(Color.rgb(79, 70, 229), 10); setTextColor(Color.WHITE) }
-            else { background = rounded(Color.WHITE, 10, Color.rgb(195, 201, 209)); setTextColor(Color.rgb(21, 24, 28)) }
-        }
-        box.addView(row(mAppBtn, mApiBtn).apply { setPadding(0, dp(8), 0, dp(2)) })
-        if (!useApp && aiApiKey().isEmpty()) {
-            box.addView(btn("⚙ " + I18n.t("aiKeyMissing"), true) { settingsDialog() }.apply {
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(6) }
-            })
-        }
-        fun dispatchAi(question: String, context: String, siteName: String = "") {
-            if (aiUseGeminiApp()) sendPromptToGeminiApp(question, context, siteName)
-            else runAiQuery(if (context.isNotEmpty()) "$question\n\n$context" else question)
-        }
+            textSize = 16f
+            setPadding(dp(12), 0, dp(12), 0)
+            if (hasCustom) {
+                background = rounded(Color.rgb(238, 242, 255), 10, Color.rgb(79, 70, 229))
+                setTextColor(Color.rgb(79, 70, 229))
+            } else {
+                background = rounded(Color.WHITE, 10, Color.rgb(195, 201, 209))
+                setTextColor(Color.rgb(21, 24, 28))
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)).apply { leftMargin = dp(8) }
+        })
+        box.addView(hdrRow)
         if (s != null) {
             val panels = store.panels(s.id)
             val faults = store.faults(s.id)
@@ -2750,10 +2713,10 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                     if (recs.isNotEmpty()) "Разбери активные неисправности объекта вместе со снятой историей и тревогами: проведи параллели между ними (повторяющиеся/плавающие сбои на тех же шлейфах и датчиках, замыкания на землю, обрывы/КЗ) и дай понятный пошаговый план проверки на объекте."
                     else "Разбери активные неисправности объекта: найди вероятные обрывы/КЗ на шлейфах (Loop), системные проблемы, повторяющиеся датчики и дай понятный пошаговый план проверки на объекте."
                 }
-                dispatchAi(q, ctx, s.name)
+                sendPromptToGeminiApp(q, ctx, s.name)
             }.apply {
                 background = rounded(Color.rgb(79, 70, 229), 10); setTextColor(Color.WHITE)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(8) }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(12) }
             })
             box.addView(btn(I18n.t("aiActAlarms")) {
                 if (recs.isEmpty()) { toast(I18n.t("aiNoRecords")); return@btn }
@@ -2761,61 +2724,22 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
                 val actCtx = if (faults.any { it.active && !it.hidden }) "\n" + AiHelper.buildSiteFaultsContext(s, panels, faults, store) else ""
                 val q = if (I18n.he) "נתח את אזעקות האש וההיסטוריה והצלב אותן עם התקלות הפעילות: זהה גלאים עם אזעקות שווא חוזרות, תקלות צפות, אזורים בעייתיים ומה כדאי לבדוק או לנקות."
                     else "Проанализируй снятые пожарные тревоги и историю и сопоставь их с активными ошибками: найди датчики с частыми/ложными срабатываниями, плавающие сбои, проблемные зоны и подскажи, что проверить или заменить."
-                dispatchAi(q, recCtx + actCtx, s.name)
+                sendPromptToGeminiApp(q, recCtx + actCtx, s.name)
             }.apply {
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
-            })
-            box.addView(btn(I18n.t("aiActReport")) {
-                val ctx = AiHelper.buildSiteFaultsContext(s, panels, faults, store)
-                val q = "כתוב סיכום מקצועי, קצר ומסודר בעברית למנהל/מהנדס האתר על המצב הנוכחי של מערכת גילוי האש לפי התקלות הפעילות והערות הטכנאי (בלי מידע מיותר)."
-                dispatchAi(q, ctx, s.name)
-            }.apply {
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(6) }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(8) }
             })
         }
-        val hasCustom = aiCustomPrompt().isNotEmpty()
-        box.addView(btn(I18n.t("aiInstrTitle") + if (hasCustom) " ✓" else "") {
-            aiInstructionsDialog()
-        }.apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { topMargin = dp(6) }
-        })
         val qIn = input(I18n.t("aiAskHint"), "", true)
         box.addView(qIn)
         box.addView(row(
-            btn(if (useApp) I18n.t("aiModeGemini") else I18n.t("aiAskBtn"), true) {
+            btn(I18n.t("aiModeGemini"), true) {
                 val q = qIn.text.toString().trim()
                 if (q.isEmpty()) return@btn
                 val ctx = if (s != null) AiHelper.buildFullSiteContext(s, store.panels(s.id), store.faults(s.id), store.records(s.id), store, 60) else ""
-                dispatchAi(q, ctx, s?.name ?: "")
+                sendPromptToGeminiApp(q, ctx, s?.name ?: "")
             },
             btn(I18n.t("back")) { go(aiReturnScr) }
         ).apply { setPadding(0, dp(4), 0, 0) })
-        val stTv = tv(if (aiBusy) I18n.t("aiThinking") else "", 14f, true, Color.rgb(79, 70, 229)).apply {
-            setPadding(0, dp(8), 0, dp(4))
-        }
-        aiStatusView = stTv
-        box.addView(stTv)
-        val ansCard = card()
-        val cleanAns = aiAnswer.replace("**", "").replace(Regex("(?m)^#{1,4}\\s*"), "").replace(Regex("(?m)^\\s*\\*\\s+"), "• ")
-        val ansTv = tv(cleanAns, 15f)
-        aiAnswerView = ansTv
-        ansCard.addView(ansTv)
-        if (aiAnswer.isNotEmpty()) {
-            ansCard.addView(row(
-                btn(I18n.t("aiCopy")) {
-                    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    cm.setPrimaryClip(android.content.ClipData.newPlainText("G1 AI", aiAnswer))
-                    toast(I18n.t("aiCopied"))
-                },
-                btn(I18n.t("send")) {
-                    val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, aiAnswer) }
-                    startActivity(Intent.createChooser(send, I18n.t("sendWith")))
-                }
-            ).apply { setPadding(0, dp(8), 0, 0) })
-            box.addView(ansCard)
-        } else if (!aiBusy) {
-            box.addView(ansCard.apply { visibility = View.GONE })
-        }
         return sv
     }
 
@@ -2885,31 +2809,6 @@ class MainActivity : Activity(), SerialInputOutputManager.Listener {
         } catch (_: Exception) {}
         try { startActivity(Intent.createChooser(send, I18n.t("aiSendTo"))) }
         catch (e: Exception) { toast(I18n.t("fileErr") + e.message) }
-    }
-
-    private fun runAiQuery(prompt: String) {
-        val key = aiApiKey()
-        if (key.isEmpty()) {
-            toast(I18n.t("aiKeyMissing"))
-            settingsDialog()
-            return
-        }
-        aiBusy = true
-        aiStatusView?.text = I18n.t("aiThinking")
-        Thread {
-            val res = AiHelper.ask(key, fullSystemPrompt(), prompt)
-            mainHandler.post {
-                aiBusy = false
-                res.onSuccess {
-                    aiAnswer = it
-                    if (scr == Scr.AI) render()
-                }
-                res.onFailure {
-                    aiAnswer = "❌ " + (it.message ?: "Error")
-                    if (scr == Scr.AI) render()
-                }
-            }
-        }.start()
     }
 
     private fun actionsEditor() {
